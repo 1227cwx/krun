@@ -22,7 +22,6 @@ const SURFACE: COLORREF = 0x00ffffff;
 const SOFT: COLORREF = 0x00f6f6f6;
 const BORDER: COLORREF = 0x00d7d2cb;
 const OUTER_BORDER: COLORREF = 0x009f9a92;
-const CONTENT_BG: COLORREF = 0x00faf9f7;
 const HOVER: COLORREF = 0x00f7f3ed;
 const OVERLAY_SHADE: COLORREF = 0x00e8e5e0;
 const TEXT: COLORREF = 0x00302f2d;
@@ -71,15 +70,9 @@ pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
     unsafe {
         SetBkMode(memory, TRANSPARENT as i32);
         fill(memory, data.layout.client, BG);
-        match data.view {
-            View::Launcher => {
-                fill(memory, data.layout.content.inset(1), CONTENT_BG);
-                frame(memory, data.layout.content, BORDER, 1);
-            }
-            View::Settings => {
-                fill(memory, data.layout.settings_content.inset(1), SURFACE);
-                frame(memory, data.layout.settings_content, BORDER, 1);
-            }
+        if data.view == View::Settings {
+            fill(memory, data.layout.settings_content.inset(1), SURFACE);
+            frame(memory, data.layout.settings_content, BORDER, 1);
         }
         fill(memory, data.layout.titlebar, TITLE_BG);
         fill(
