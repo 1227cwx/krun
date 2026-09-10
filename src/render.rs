@@ -273,15 +273,15 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
         } else if data.hovered_item == Some(global) {
             unsafe { fill(hdc, tile, HOVER) };
         }
-        let size = scaled(data.layout.scale, 32);
+        let size = scaled(data.layout.scale, 30);
         let x = cell.left + (cell.width() - size) / 2;
-        let y = cell.top + scaled(data.layout.scale, 10);
+        let y = cell.top + scaled(data.layout.scale, 8);
         if !item_icon.is_null() {
             unsafe { DrawIconEx(hdc, x, y, *item_icon, size, size, 0, null_mut(), DI_NORMAL) };
         }
         let label = Rect {
             left: cell.left + scaled(data.layout.scale, 3),
-            top: y + size + scaled(data.layout.scale, 6),
+            top: y + size + scaled(data.layout.scale, 5),
             right: cell.right - scaled(data.layout.scale, 3),
             bottom: cell.bottom - scaled(data.layout.scale, 2),
         };
