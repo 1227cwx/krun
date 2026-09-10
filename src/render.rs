@@ -47,6 +47,8 @@ pub struct RenderData<'a> {
     pub add_overlay_open: bool,
     pub text_overlay_title: Option<&'static str>,
     pub content_progress: f32,
+    pub accent: COLORREF,
+    pub hwnd: HWND,
 }
 
 pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
@@ -69,8 +71,16 @@ pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
     unsafe {
         SetBkMode(memory, TRANSPARENT as i32);
         fill(memory, data.layout.client, BG);
-        fill(memory, data.layout.content.inset(1), CONTENT_BG);
-        frame(memory, data.layout.content, BORDER, 1);
+        match data.view {
+            View::Launcher => {
+                fill(memory, data.layout.content.inset(1), CONTENT_BG);
+                frame(memory, data.layout.content, BORDER, 1);
+            }
+            View::Settings => {
+                fill(memory, data.layout.settings_content.inset(1), SURFACE);
+                frame(memory, data.layout.settings_content, BORDER, 1);
+            }
+        }
         fill(memory, data.layout.titlebar, TITLE_BG);
         fill(
             memory,
@@ -276,17 +286,6 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
         let size = scaled(data.layout.scale, 32);
         let x = cell.left + (cell.width() - size) / 2;
         let y = cell.top + scaled(data.layout.scale, 12);
-        if data.selected == Some(global) {
-            unsafe {
-                fill_circle(
-                    hdc,
-                    x + size / 2,
-                    y + size / 2,
-                    scaled(data.layout.scale, 25),
-                    SURFACE,
-                )
-            };
-        }
         if item_icon.is_null() {
             unsafe {
                 frame(
@@ -361,6 +360,7 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 hdc,
                 Rect {
                     top: row.bottom - 1,
+                    left: row.left + scaled(data.layout.scale, 12),
                     ..*row
                 },
                 BORDER,
@@ -369,10 +369,10 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 hdc,
                 title,
                 Rect {
-                    left: row.left + scaled(data.layout.scale, 14),
-                    top: row.top + scaled(data.layout.scale, 7),
-                    right: target.left - scaled(data.layout.scale, 12),
-                    bottom: row.top + scaled(data.layout.scale, 29),
+                    left: row.left + scaled(data.layout.scale, 16),
+                    top: row.top + scaled(data.layout.scale, 12),
+                    right: target.left - scaled(data.layout.scale, 16),
+                    bottom: row.top + scaled(data.layout.scale, 34),
                 },
                 TEXT,
                 0x00000004 | 0x00000020,
@@ -382,10 +382,10 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 hdc,
                 detail,
                 Rect {
-                    left: row.left + scaled(data.layout.scale, 14),
-                    top: row.top + scaled(data.layout.scale, 29),
-                    right: target.left - scaled(data.layout.scale, 12),
-                    bottom: row.bottom - scaled(data.layout.scale, 4),
+                    left: row.left + scaled(data.layout.scale, 16),
+                    top: row.top + scaled(data.layout.scale, 33),
+                    right: target.left - scaled(data.layout.scale, 16),
+                    bottom: row.bottom - scaled(data.layout.scale, 6),
                 },
                 MUTED,
                 0x00000004 | 0x00000020,
@@ -406,7 +406,11 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 frame(
                     hdc,
                     *target,
-                    if data.hotkey_capture { ACCENT } else { BORDER },
+                    if data.hotkey_capture {
+                        data.accent
+                    } else {
+                        BORDER
+                    },
                     1,
                 );
                 let label = if data.hotkey_capture {
@@ -423,7 +427,14 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 );
             },
             SettingControl::Startup => unsafe {
-                toggle(hdc, *target, data.startup_enabled, false, data.layout.scale)
+                toggle(
+                    hdc,
+                    *target,
+                    data.startup_enabled,
+                    false,
+                    data.layout.scale,
+                    data.accent,
+                )
             },
             SettingControl::DoubleClick => unsafe {
                 toggle(
@@ -432,16 +443,11 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                     data.config.double_click_launch,
                     false,
                     data.layout.scale,
+                    data.accent,
                 )
             },
             SettingControl::Centered => unsafe {
-                checkbox(
-                    hdc,
-                    *target,
-                    data.config.window.centered,
-                    false,
-                    data.layout.scale,
-                )
+                system_checkbox(hdc, data.hwnd, *target, data.config.window.centered, false)
             },
             SettingControl::Movable => unsafe {
                 toggle(
@@ -450,6 +456,7 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                     data.config.window.movable,
                     data.config.window.centered,
                     data.layout.scale,
+                    data.accent,
                 )
             },
             SettingControl::Resizable => unsafe {
@@ -459,8 +466,86 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                     data.config.window.resizable,
                     false,
                     data.layout.scale,
+                    data.accent,
                 )
             },
+        }
+    }
+}
+
+/// Draws a native Windows themed checkbox so it matches Explorer and Settings.
+unsafe fn system_checkbox(hdc: HDC, hwnd: HWND, rect: Rect, checked: bool, disabled: bool) {
+    use windows_sys::Win32::UI::Controls::{
+        BP_CHECKBOX, CBS_CHECKEDDISABLED, CBS_CHECKEDNORMAL, CBS_UNCHECKEDDISABLED,
+        CBS_UNCHECKEDNORMAL, CloseThemeData, DrawThemeBackground, OpenThemeData,
+    };
+    const VSCLASS_BUTTON: &str = "Button";
+
+    let size = (rect.height().min(rect.width())).max(1);
+    let square = Rect {
+        left: rect.right - size,
+        top: rect.top + (rect.height() - size) / 2,
+        right: rect.right,
+        bottom: rect.top + (rect.height() + size) / 2,
+    };
+    let class = wide(VSCLASS_BUTTON);
+    let theme = unsafe { OpenThemeData(hwnd, class.as_ptr()) };
+    if theme == 0 {
+        unsafe { fallback_checkbox(hdc, square, checked, disabled) };
+        return;
+    }
+    let state = match (checked, disabled) {
+        (true, true) => CBS_CHECKEDDISABLED,
+        (true, false) => CBS_CHECKEDNORMAL,
+        (false, true) => CBS_UNCHECKEDDISABLED,
+        (false, false) => CBS_UNCHECKEDNORMAL,
+    };
+    let native = RECT {
+        left: square.left,
+        top: square.top,
+        right: square.right,
+        bottom: square.bottom,
+    };
+    unsafe {
+        DrawThemeBackground(theme, hdc, BP_CHECKBOX, state, &native, std::ptr::null());
+        CloseThemeData(theme);
+    }
+}
+
+/// Fallback box used only when the system theme service is unavailable.
+unsafe fn fallback_checkbox(hdc: HDC, square: Rect, checked: bool, disabled: bool) {
+    let color = if disabled {
+        DISABLED
+    } else if checked {
+        ACCENT
+    } else {
+        BORDER
+    };
+    unsafe {
+        if checked {
+            fill(hdc, square, color);
+            let size = square.height();
+            line(
+                hdc,
+                square.left + size / 4,
+                square.top + size / 2,
+                square.left + size / 2,
+                square.bottom - size / 4,
+                SURFACE,
+                2,
+            );
+            line(
+                hdc,
+                square.left + size / 2,
+                square.bottom - size / 4,
+                square.right - size / 5,
+                square.top + size / 4,
+                SURFACE,
+                2,
+            );
+        } else {
+            fill(hdc, square, SURFACE);
+            frame(hdc, square, color, 1);
         }
     }
 }
@@ -610,10 +695,18 @@ unsafe fn draw_icon(hdc: HDC, rect: Rect, kind: ToolButton, color: COLORREF, sca
     }
 }
 
-unsafe fn toggle(hdc: HDC, rect: Rect, checked: bool, disabled: bool, scale: f32) {
-    let width = scaled(scale, 42);
-    let height = scaled(scale, 22);
-    let left = rect.right - width - scaled(scale, 10);
+/// Draws a Windows 11 style toggle switch filling the given control rect.
+unsafe fn toggle(
+    hdc: HDC,
+    rect: Rect,
+    checked: bool,
+    disabled: bool,
+    scale: f32,
+    accent: COLORREF,
+) {
+    let width = scaled(scale, 40);
+    let height = scaled(scale, 20);
+    let left = rect.right - width;
     let top = rect.top + (rect.height() - height) / 2;
     let body = Rect {
         left,
@@ -621,65 +714,67 @@ unsafe fn toggle(hdc: HDC, rect: Rect, checked: bool, disabled: bool, scale: f32
         right: left + width,
         bottom: top + height,
     };
-    let color = if disabled {
-        DISABLED
+    let track = if disabled {
+        0x00e6e2dd
     } else if checked {
-        ACCENT
+        accent
     } else {
-        BORDER
+        0x00c9c6c1
     };
+    let knob_radius = height / 2 - scaled(scale, 3);
+    let center_y = (body.top + body.bottom) / 2;
     unsafe {
-        fill(hdc, body, color);
-        let radius = height / 2 - scaled(scale, 3);
+        rounded_fill(hdc, body, track, height / 2);
+        let knob_color = if disabled { 0x00f2f0ee } else { SURFACE };
         let knob_x = if checked {
             body.right - height / 2
         } else {
             body.left + height / 2
         };
-        fill_circle(hdc, knob_x, (body.top + body.bottom) / 2, radius, SURFACE);
+        if disabled {
+            fill_circle(hdc, knob_x, center_y, knob_radius, knob_color);
+        } else {
+            fill_circle(hdc, knob_x, center_y, knob_radius + 1, 0x001a1a1a);
+            fill_circle(hdc, knob_x, center_y, knob_radius, knob_color);
+        }
     }
 }
 
-unsafe fn checkbox(hdc: HDC, rect: Rect, checked: bool, disabled: bool, scale: f32) {
-    let size = scaled(scale, 20);
-    let right = rect.right - scaled(scale, 12);
-    let box_rect = Rect {
-        left: right - size,
-        top: rect.top + (rect.height() - size) / 2,
-        right,
-        bottom: rect.top + (rect.height() + size) / 2,
-    };
-    let color = if disabled {
-        DISABLED
-    } else if checked {
-        ACCENT
-    } else {
-        BORDER
-    };
+/// Fills a rounded rectangle without relying on system theme services.
+unsafe fn rounded_fill(hdc: HDC, rect: Rect, color: COLORREF, radius: i32) {
+    let radius = radius.max(1).min(rect.height() / 2).min(rect.width() / 2);
+    let brush = unsafe { CreateSolidBrush(color) };
+    let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
+    let old_brush = unsafe { SelectObject(hdc, brush as HGDIOBJ) };
+    let old_pen = unsafe { SelectObject(hdc, pen as HGDIOBJ) };
     unsafe {
-        if checked {
-            fill(hdc, box_rect, color);
-            line(
-                hdc,
-                box_rect.left + size / 4,
-                box_rect.top + size / 2,
-                box_rect.left + size / 2,
-                box_rect.bottom - size / 4,
-                SURFACE,
-                2,
-            );
-            line(
-                hdc,
-                box_rect.left + size / 2,
-                box_rect.bottom - size / 4,
-                box_rect.right - size / 5,
-                box_rect.top + size / 4,
-                SURFACE,
-                2,
-            );
-        } else {
-            frame(hdc, box_rect, color, 1);
-        }
+        Ellipse(
+            hdc,
+            rect.left,
+            rect.top,
+            rect.left + radius * 2 + 1,
+            rect.bottom,
+        );
+        Ellipse(
+            hdc,
+            rect.right - radius * 2 - 1,
+            rect.top,
+            rect.right,
+            rect.bottom,
+        );
+        fill(
+            hdc,
+            Rect {
+                left: rect.left + radius,
+                right: rect.right - radius,
+                ..rect
+            },
+            color,
+        );
+        SelectObject(hdc, old_pen);
+        SelectObject(hdc, old_brush);
+        DeleteObject(pen as HGDIOBJ);
+        DeleteObject(brush as HGDIOBJ);
     }
 }
 

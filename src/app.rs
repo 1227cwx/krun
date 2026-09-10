@@ -91,6 +91,7 @@ pub struct App {
     pub shown_at: Instant,
     fade: Option<Fade>,
     current_alpha: u8,
+    accent: windows_sys::Win32::Foundation::COLORREF,
     content_started: Option<Instant>,
     icon_loader: Option<IconLoader>,
     icons: HashMap<IconKey, HICON>,
@@ -135,6 +136,7 @@ impl App {
             shown_at: Instant::now() - Duration::from_secs(1),
             fade: None,
             current_alpha: 255,
+            accent: crate::theme::accent_color(),
             content_started: None,
             icon_loader: None,
             icons: HashMap::new(),
@@ -238,7 +240,26 @@ impl App {
         if unsafe { IsWindowVisible(self.hwnd) } == 0 {
             return;
         }
+        self.reset_search_state();
         self.start_fade(0);
+    }
+
+    fn reset_search_state(&mut self) {
+        if !self.search_mode {
+            return;
+        }
+        self.search_mode = false;
+        self.query.clear();
+        self.search_results.clear();
+        self.page_offset = 0;
+        if matches!(self.input_mode, Some(InputMode::Search)) {
+            self.input_mode = None;
+        }
+        if let Some(input) = &self.text_input {
+            input.hide();
+        }
+        self.selected = None;
+        self.relayout();
     }
 
     pub fn animation_tick(&mut self) {
@@ -355,6 +376,8 @@ impl App {
             add_overlay_open: self.add_overlay_open,
             text_overlay_title: self.input_title(),
             content_progress: self.content_progress(),
+            accent: self.accent,
+            hwnd: self.hwnd,
         };
         unsafe { render::paint(self.hwnd, &data) };
     }

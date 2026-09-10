@@ -24,6 +24,7 @@ pub struct TextInput {
     confirm: HWND,
     cancel: HWND,
     font: HFONT,
+    search_font: HFONT,
 }
 
 impl TextInput {
@@ -51,7 +52,8 @@ impl TextInput {
         }
         let confirm = create_button(parent, IDOK as usize, "确定", true)?;
         let cancel = create_button(parent, IDCANCEL as usize, "取消", false)?;
-        let font = create_font(dpi);
+        let font = create_font(dpi, 14);
+        let search_font = create_font(dpi, 16);
         unsafe {
             SetWindowSubclass(hwnd, Some(edit_proc), SUBCLASS_ID, 0);
             SendMessageW(hwnd, WM_SETFONT, font as usize, 1);
@@ -66,23 +68,21 @@ impl TextInput {
             confirm,
             cancel,
             font,
+            search_font,
         })
     }
 
     pub fn show(&self, rect: Rect, value: &str, buttons: Option<(Rect, Rect)>) {
-        let inset = 8;
         let value = wide(value);
+        let font = if buttons.is_some() {
+            self.font
+        } else {
+            self.search_font
+        };
         unsafe {
             SetWindowTextW(self.hwnd, value.as_ptr());
-            SetWindowPos(
-                self.hwnd,
-                null_mut(),
-                rect.left + inset,
-                rect.top + 5,
-                (rect.width() - inset * 2).max(1),
-                (rect.height() - 10).max(1),
-                0x0004,
-            );
+            SendMessageW(self.hwnd, WM_SETFONT, font as usize, 1);
+            self.place(rect);
             ShowWindow(self.hwnd, SW_SHOW);
             SetFocus(self.hwnd);
             let length = GetWindowTextLengthW(self.hwnd) as usize;
@@ -108,15 +108,19 @@ impl TextInput {
     }
 
     pub fn set_rect(&self, rect: Rect) {
+        self.place(rect);
+    }
+
+    fn place(&self, rect: Rect) {
         let inset = 8;
         unsafe {
             SetWindowPos(
                 self.hwnd,
                 null_mut(),
                 rect.left + inset,
-                rect.top + 5,
+                rect.top + 3,
                 (rect.width() - inset * 2).max(1),
-                (rect.height() - 10).max(1),
+                (rect.height() - 6).max(1),
                 0x0004,
             );
         }
@@ -141,6 +145,9 @@ impl Drop for TextInput {
     fn drop(&mut self) {
         if !self.font.is_null() {
             unsafe { DeleteObject(self.font as HGDIOBJ) };
+        }
+        if !self.search_font.is_null() {
+            unsafe { DeleteObject(self.search_font as HGDIOBJ) };
         }
     }
 }
@@ -218,9 +225,9 @@ unsafe extern "system" fn edit_proc(
     unsafe { DefSubclassProc(hwnd, message, wparam, lparam) }
 }
 
-fn create_font(dpi: u32) -> HFONT {
+fn create_font(dpi: u32, size: i32) -> HFONT {
     let face = wide("Microsoft YaHei UI");
-    let height = (14 * dpi.max(96) as i32 / 96).max(12);
+    let height = (size * dpi.max(96) as i32 / 96).max(12);
     unsafe {
         CreateFontW(
             -height,

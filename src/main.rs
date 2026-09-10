@@ -11,6 +11,7 @@ mod search;
 mod shell;
 mod startup;
 mod text_input;
+mod theme;
 mod tray;
 mod win;
 

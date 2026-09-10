@@ -83,6 +83,7 @@ pub struct Layout {
     pub cells: Vec<Rect>,
     pub columns: usize,
     pub visible_capacity: usize,
+    pub settings_content: Rect,
     pub settings_rows: Vec<(SettingControl, Rect, Rect)>,
     pub add_overlay: Rect,
     pub add_file_button: Rect,
@@ -214,15 +215,15 @@ impl Layout {
             left: px(18),
             top: px(98),
             right: width - px(18),
-            bottom: px(140),
+            bottom: px(130),
         };
         let search_close_button = Rect {
-            left: search_box.right - px(40),
+            left: search_box.right - px(32),
             top: search_box.top,
             right: search_box.right,
             bottom: search_box.bottom,
         };
-        let content_top = if search_mode { px(152) } else { px(100) };
+        let content_top = if search_mode { px(140) } else { px(100) };
         let content = Rect {
             left: px(16),
             top: content_top,
@@ -250,10 +251,15 @@ impl Layout {
             .collect();
 
         let mut settings_rows = Vec::new();
+        let settings_content = Rect {
+            left: px(24),
+            top: px(58),
+            right: width - px(24),
+            bottom: height - px(18),
+        };
         if view == View::Settings {
-            let row_left = px(32);
-            let row_right = width - px(32);
-            let control_width = px(178);
+            let row_height = px(60);
+            let control_right = settings_content.right - px(20);
             for (index, control) in [
                 SettingControl::Hotkey,
                 SettingControl::Startup,
@@ -265,18 +271,32 @@ impl Layout {
             .into_iter()
             .enumerate()
             {
-                let top = px(78 + index as i32 * 63);
+                let top = settings_content.top + index as i32 * row_height;
                 let row = Rect {
-                    left: row_left,
+                    left: settings_content.left,
                     top,
-                    right: row_right,
-                    bottom: top + px(54),
+                    right: settings_content.right,
+                    bottom: top + row_height,
                 };
-                let target = Rect {
-                    left: row_right - control_width,
-                    top: top + px(10),
-                    right: row_right,
-                    bottom: top + px(48),
+                let target = match control {
+                    SettingControl::Hotkey => Rect {
+                        left: control_right - px(190),
+                        top: top + px(14),
+                        right: control_right,
+                        bottom: top + px(46),
+                    },
+                    SettingControl::Centered => Rect {
+                        left: control_right - px(20),
+                        top: top + px(20),
+                        right: control_right,
+                        bottom: top + px(40),
+                    },
+                    _ => Rect {
+                        left: control_right - px(40),
+                        top: top + px(20),
+                        right: control_right,
+                        bottom: top + px(40),
+                    },
                 };
                 settings_rows.push((control, row, target));
             }
@@ -372,6 +392,7 @@ impl Layout {
             cells,
             columns,
             visible_capacity,
+            settings_content,
             settings_rows,
             add_overlay,
             add_file_button,
@@ -426,7 +447,7 @@ impl Layout {
     pub fn setting_at(&self, x: i32, y: i32) -> Option<SettingControl> {
         self.settings_rows
             .iter()
-            .find_map(|(control, _, target)| target.contains(x, y).then_some(*control))
+            .find_map(|(control, row, _)| row.contains(x, y).then_some(*control))
     }
 }
 
