@@ -223,15 +223,15 @@ impl Layout {
             right: search_box.right,
             bottom: search_box.bottom,
         };
-        let content_top = if search_mode { px(140) } else { px(100) };
+        let content_top = if search_mode { px(136) } else { px(98) };
         let content = Rect {
-            left: px(16),
+            left: px(10),
             top: content_top,
-            right: width - px(16),
-            bottom: height - px(16),
+            right: width - px(10),
+            bottom: height - px(10),
         };
         let min_cell_width = px(92).max(1);
-        let cell_height = px(112).max(1);
+        let cell_height = px(104).max(1);
         let columns = (content.width() / min_cell_width).max(1) as usize;
         let cell_width = (content.width() / columns as i32).max(1);
         let rows = (content.height() / cell_height).max(1) as usize;
