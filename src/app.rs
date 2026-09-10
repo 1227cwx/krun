@@ -83,6 +83,7 @@ pub struct App {
     pub add_overlay_open: bool,
     pub modal_open: bool,
     pub hovered_item: Option<usize>,
+    pub scrollbar_hover: bool,
     pub pressed_item: Option<usize>,
     /// True when the current selection was moved with the keyboard, so the
     /// persistent highlight is drawn. Mouse interaction relies on hover only.
@@ -138,6 +139,7 @@ impl App {
             add_overlay_open: false,
             modal_open: false,
             hovered_item: None,
+            scrollbar_hover: false,
             pressed_item: None,
             keyboard_selection: false,
             dragging_scrollbar: false,
@@ -389,6 +391,8 @@ impl App {
             hotkey_capture: self.hotkey_capture,
             page_offset: self.page_offset,
             item_count: self.visible_refs().len(),
+            scrollbar_hover: self.scrollbar_hover,
+            scrollbar_active: self.dragging_scrollbar,
             hovered_item: self.hovered_item,
             pressed_item: self.pressed_item,
             keyboard_selection: self.keyboard_selection,
@@ -538,7 +542,9 @@ impl App {
     }
 
     pub fn mouse_move(&mut self, x: i32, y: i32) {
-        let hovered = if self.view == View::Launcher
+        let scrollbar_hover = self.scrollbar_contains(x, y);
+        let hovered = if !scrollbar_hover
+            && self.view == View::Launcher
             && !self.add_overlay_open
             && (self.input_mode.is_none() || matches!(self.input_mode, Some(InputMode::Search)))
         {
@@ -549,16 +555,25 @@ impl App {
         } else {
             None
         };
-        if hovered != self.hovered_item {
+        if hovered != self.hovered_item || scrollbar_hover != self.scrollbar_hover {
             self.hovered_item = hovered;
+            self.scrollbar_hover = scrollbar_hover;
             self.redraw();
         }
+    }
+
+    /// True when the point is inside the scrollbar track or thumb.
+    fn scrollbar_contains(&self, x: i32, y: i32) -> bool {
+        self.view == View::Launcher
+            && self.layout.scrollbar_visible
+            && self.layout.scrollbar_track.contains(x, y)
     }
 
     pub fn mouse_leave(&mut self) {
         let had_hover = self.hovered_item.take().is_some();
         let had_press = self.pressed_item.take().is_some();
-        if had_hover || had_press {
+        let had_scroll = std::mem::take(&mut self.scrollbar_hover);
+        if had_hover || had_press || had_scroll {
             self.redraw();
         }
     }

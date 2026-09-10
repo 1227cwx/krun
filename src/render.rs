@@ -10,8 +10,8 @@ use windows_sys::Win32::Graphics::Gdi::{
     CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
     DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint, FF_DONTCARE, FW_NORMAL, FillRect,
     GetStockObject, GetTextExtentExPointW, HDC, HFONT, HGDIOBJ, LineTo, MoveToEx, NULL_BRUSH,
-    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, SRCCOPY, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, RoundRect, SRCCOPY, SelectObject,
+    SetBkMode, SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{DI_NORMAL, DrawIconEx, GetClientRect, HICON};
 
@@ -44,6 +44,8 @@ pub struct RenderData<'a> {
     pub hotkey_capture: bool,
     pub page_offset: usize,
     pub item_count: usize,
+    pub scrollbar_hover: bool,
+    pub scrollbar_active: bool,
     pub hovered_item: Option<usize>,
     pub pressed_item: Option<usize>,
     pub keyboard_selection: bool,
@@ -303,27 +305,22 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
             .layout
             .scrollbar_thumb(data.page_offset, data.item_count)
     {
-        let track = Rect {
-            left: data.layout.scrollbar_track.left + scaled(data.layout.scale, 2),
-            top: data.layout.scrollbar_track.top,
-            right: data.layout.scrollbar_track.right - scaled(data.layout.scale, 2),
-            bottom: data.layout.scrollbar_track.bottom,
+        let inset = scaled(data.layout.scale, 3);
+        let bar = Rect {
+            left: thumb.left + inset,
+            top: thumb.top,
+            right: thumb.right - inset,
+            bottom: thumb.bottom,
         };
-        let radius = (track.width() / 2).max(1);
-        unsafe {
-            rounded_fill(hdc, track, 0x00edeae6, radius);
-            let inset = scaled(data.layout.scale, 2);
-            rounded_fill(
-                hdc,
-                Rect {
-                    left: thumb.left + inset,
-                    right: thumb.right - inset,
-                    ..thumb
-                },
-                0x00b3aea6,
-                radius,
-            );
-        }
+        let color = if data.scrollbar_active {
+            0x00736f68
+        } else if data.scrollbar_hover {
+            0x008b867f
+        } else {
+            0x00a8a39b
+        };
+        let radius = (bar.width() / 2).max(1);
+        unsafe { rounded_fill(hdc, bar, color, radius) };
     }
 
     if data.items.is_empty() {
@@ -744,36 +741,26 @@ unsafe fn toggle(
     }
 }
 
-/// Fills a rounded rectangle without relying on system theme services.
+/// Fills a rounded rectangle using GDI's own rounded-rectangle primitive,
+/// which produces clean, symmetric corners at any size.
 unsafe fn rounded_fill(hdc: HDC, rect: Rect, color: COLORREF, radius: i32) {
-    let radius = radius.max(1).min(rect.height() / 2).min(rect.width() / 2);
+    if rect.width() <= 0 || rect.height() <= 0 {
+        return;
+    }
+    let diameter = radius.max(1).min(rect.height() / 2).min(rect.width() / 2) * 2;
     let brush = unsafe { CreateSolidBrush(color) };
     let pen = unsafe { CreatePen(PS_SOLID, 1, color) };
     let old_brush = unsafe { SelectObject(hdc, brush as HGDIOBJ) };
     let old_pen = unsafe { SelectObject(hdc, pen as HGDIOBJ) };
     unsafe {
-        Ellipse(
+        RoundRect(
             hdc,
             rect.left,
             rect.top,
-            rect.left + radius * 2 + 1,
-            rect.bottom,
-        );
-        Ellipse(
-            hdc,
-            rect.right - radius * 2 - 1,
-            rect.top,
             rect.right,
             rect.bottom,
-        );
-        fill(
-            hdc,
-            Rect {
-                left: rect.left + radius,
-                right: rect.right - radius,
-                ..rect
-            },
-            color,
+            diameter,
+            diameter,
         );
         SelectObject(hdc, old_pen);
         SelectObject(hdc, old_brush);
