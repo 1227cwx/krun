@@ -296,14 +296,15 @@ impl Layout {
             .collect();
 
         let mut settings_rows = Vec::new();
+        // Start below the title bar and keep six rows inside the smallest window.
         let settings_content = Rect {
             left: px(24),
-            top: px(58),
+            top: px(50),
             right: width - px(24),
-            bottom: height - px(18),
+            bottom: height - px(14),
         };
         if view == View::Settings {
-            let row_height = px(60);
+            let row_height = px(54);
             let control_right = settings_content.right - px(20);
             for (index, control) in [
                 SettingControl::Hotkey,
@@ -326,21 +327,21 @@ impl Layout {
                 let target = match control {
                     SettingControl::Hotkey => Rect {
                         left: control_right - px(190),
-                        top: top + px(14),
+                        top: top + px(11),
                         right: control_right,
-                        bottom: top + px(46),
+                        bottom: top + px(43),
                     },
                     SettingControl::Centered => Rect {
                         left: control_right - px(20),
-                        top: top + px(20),
+                        top: top + px(17),
                         right: control_right,
-                        bottom: top + px(40),
+                        bottom: top + px(37),
                     },
                     _ => Rect {
                         left: control_right - px(40),
-                        top: top + px(20),
+                        top: top + px(17),
                         right: control_right,
-                        bottom: top + px(40),
+                        bottom: top + px(37),
                     },
                 };
                 settings_rows.push((control, row, target));
@@ -640,6 +641,33 @@ mod tests {
         });
         assert_eq!(layout.settings_rows.len(), 6);
         assert!(layout.settings_rows.last().unwrap().1.bottom <= layout.client.bottom);
+    }
+
+    #[test]
+    fn settings_fit_inside_the_smallest_window() {
+        for dpi in [96u32, 120, 144, 192] {
+            // The minimum window size is expressed in 96-DPI logical units and
+            // Windows enforces it in physical pixels.
+            let width = 620 * dpi as i32 / 96;
+            let height = 400 * dpi as i32 / 96;
+            let layout = Layout::calculate(LayoutInput {
+                width,
+                height,
+                dpi,
+                view: View::Settings,
+                category_names: &[],
+                category_start: 0,
+                search_mode: false,
+                item_count: 0,
+            });
+            let last = layout.settings_rows.last().unwrap().1;
+            assert!(
+                last.bottom <= layout.client.bottom,
+                "settings rows overflow at dpi {dpi}: {} > {}",
+                last.bottom,
+                layout.client.bottom
+            );
+        }
     }
 
     #[test]
