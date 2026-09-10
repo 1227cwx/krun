@@ -1,0 +1,7 @@
+/target/
+/.zcode/
+/release/KRun.exe
+/release/QuickLaunch.exe
+/release/launcher.json
+/release/launcher.json.tmp
+*.pdb

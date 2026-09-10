@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-labelledby="title desc">
+  <title id="title">KRun logo</title>
+  <desc id="desc">A geometric white K and forward arrow on a teal rounded square.</desc>
+  <rect x="24" y="24" width="464" height="464" rx="104" fill="#168393"/>
+  <path fill="#ffffff" d="M132 116h68v112l102-112h88L268 246l132 150h-91L200 267v129h-68z"/>
+  <path fill="#ffffff" d="M330 92h74v42h42v74h-42v42h-74v-42h-42v-74h42z" transform="rotate(45 367 171)"/>
+</svg>
