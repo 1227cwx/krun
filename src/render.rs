@@ -45,6 +45,7 @@ pub struct RenderData<'a> {
     pub page_offset: usize,
     pub hovered_item: Option<usize>,
     pub pressed_item: Option<usize>,
+    pub keyboard_selection: bool,
     pub add_overlay_open: bool,
     pub text_overlay_title: Option<&'static str>,
     pub content_progress: f32,
@@ -272,10 +273,10 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
         let tile = cell.inset(scaled(data.layout.scale, 3));
         if data.pressed_item == Some(global) {
             unsafe { fill(hdc, tile, PRESSED) };
-        } else if data.selected == Some(global) {
-            unsafe { fill(hdc, tile, ACCENT_SOFT) };
         } else if data.hovered_item == Some(global) {
             unsafe { fill(hdc, tile, HOVER) };
+        } else if data.keyboard_selection && data.selected == Some(global) {
+            unsafe { fill(hdc, tile, ACCENT_SOFT) };
         }
         let size = scaled(data.layout.scale, 30);
         let x = cell.left + (cell.width() - size) / 2;

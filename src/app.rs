@@ -84,6 +84,9 @@ pub struct App {
     pub modal_open: bool,
     pub hovered_item: Option<usize>,
     pub pressed_item: Option<usize>,
+    /// True when the current selection was moved with the keyboard, so the
+    /// persistent highlight is drawn. Mouse interaction relies on hover only.
+    pub keyboard_selection: bool,
     pub input_mode: Option<InputMode>,
     text_input: Option<TextInput>,
     pub tray: Option<tray::TrayIcon>,
@@ -130,6 +133,7 @@ impl App {
             modal_open: false,
             hovered_item: None,
             pressed_item: None,
+            keyboard_selection: false,
             input_mode: None,
             text_input: None,
             tray: None,
@@ -376,6 +380,7 @@ impl App {
             page_offset: self.page_offset,
             hovered_item: self.hovered_item,
             pressed_item: self.pressed_item,
+            keyboard_selection: self.keyboard_selection,
             add_overlay_open: self.add_overlay_open,
             text_overlay_title: self.input_title(),
             content_progress: self.content_progress(),
@@ -386,7 +391,10 @@ impl App {
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32) {
-        self.pressed_item = self.item_under(x, y);
+        let item = self.item_under(x, y);
+        self.pressed_item = item;
+        self.hovered_item = item;
+        self.keyboard_selection = false;
         self.left_click(x, y);
     }
 
@@ -446,6 +454,7 @@ impl App {
             let global = self.page_offset + local;
             if global < self.visible_refs().len() {
                 self.selected = Some(global);
+                self.keyboard_selection = false;
                 self.redraw();
                 if should_launch_on_single_click(self.config.double_click_launch) {
                     self.run_selected();
@@ -470,6 +479,7 @@ impl App {
         let global = self.page_offset + local;
         if global < self.visible_refs().len() {
             self.selected = Some(global);
+            self.keyboard_selection = false;
             self.redraw();
             if self.config.double_click_launch {
                 self.run_selected();
@@ -518,6 +528,7 @@ impl App {
             let global = self.page_offset + local;
             if global < self.visible_refs().len() {
                 self.selected = Some(global);
+                self.keyboard_selection = false;
                 self.show_item_menu(global);
                 self.redraw();
             }
@@ -739,6 +750,7 @@ impl App {
         let current = self.selected.unwrap_or(0) as isize;
         let selected = (current + delta).clamp(0, count as isize - 1) as usize;
         self.selected = Some(selected);
+        self.keyboard_selection = true;
         if selected < self.page_offset {
             self.page_offset = selected;
         } else if selected >= self.page_offset + self.layout.visible_capacity {
@@ -1091,6 +1103,9 @@ impl App {
         self.query.clear();
         self.search_results.clear();
         self.selected = None;
+        self.hovered_item = None;
+        self.pressed_item = None;
+        self.keyboard_selection = false;
         self.page_offset = 0;
         self.config.active_category = self.config.categories[category].id.clone();
         self.save();
@@ -1139,6 +1154,9 @@ impl App {
         };
         self.page_offset = 0;
         self.selected = (!self.visible_refs().is_empty()).then_some(0);
+        self.hovered_item = None;
+        self.pressed_item = None;
+        self.keyboard_selection = false;
         self.relayout();
         self.redraw();
     }
