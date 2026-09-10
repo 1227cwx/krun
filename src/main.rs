@@ -262,7 +262,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_MOUSEMOVE => {
             let (x, y) = app::client_point(lparam);
-            app.mouse_move(x, y);
+            if app.dragging_scrollbar {
+                app.mouse_drag(y);
+            } else {
+                app.mouse_move(x, y);
+            }
             let mut track = TRACKMOUSEEVENT {
                 cbSize: size_of::<TRACKMOUSEEVENT>() as u32,
                 dwFlags: TME_LEAVE,

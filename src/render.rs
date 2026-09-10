@@ -43,6 +43,7 @@ pub struct RenderData<'a> {
     pub startup_enabled: bool,
     pub hotkey_capture: bool,
     pub page_offset: usize,
+    pub item_count: usize,
     pub hovered_item: Option<usize>,
     pub pressed_item: Option<usize>,
     pub keyboard_selection: bool,
@@ -294,6 +295,34 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
             SelectObject(hdc, small as HGDIOBJ);
             draw_wrapped_label(hdc, &item.name, label, data.layout.scale);
             SelectObject(hdc, font as HGDIOBJ);
+        }
+    }
+
+    if data.layout.scrollbar_visible
+        && let Some(thumb) = data
+            .layout
+            .scrollbar_thumb(data.page_offset, data.item_count)
+    {
+        let track = Rect {
+            left: data.layout.scrollbar_track.left + scaled(data.layout.scale, 2),
+            top: data.layout.scrollbar_track.top,
+            right: data.layout.scrollbar_track.right - scaled(data.layout.scale, 2),
+            bottom: data.layout.scrollbar_track.bottom,
+        };
+        let radius = (track.width() / 2).max(1);
+        unsafe {
+            rounded_fill(hdc, track, 0x00edeae6, radius);
+            let inset = scaled(data.layout.scale, 2);
+            rounded_fill(
+                hdc,
+                Rect {
+                    left: thumb.left + inset,
+                    right: thumb.right - inset,
+                    ..thumb
+                },
+                0x00b3aea6,
+                radius,
+            );
         }
     }
 

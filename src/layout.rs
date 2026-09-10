@@ -83,6 +83,9 @@ pub struct Layout {
     pub cells: Vec<Rect>,
     pub columns: usize,
     pub visible_capacity: usize,
+    pub max_page_offset: usize,
+    pub scrollbar_visible: bool,
+    pub scrollbar_track: Rect,
     pub settings_content: Rect,
     pub settings_rows: Vec<(SettingControl, Rect, Rect)>,
     pub add_overlay: Rect,
@@ -96,16 +99,31 @@ pub struct Layout {
     pub text_cancel_button: Rect,
 }
 
+/// Inputs describing the window state that layout depends on.
+#[derive(Clone, Copy, Debug)]
+pub struct LayoutInput<'a> {
+    pub width: i32,
+    pub height: i32,
+    pub dpi: u32,
+    pub view: View,
+    pub category_names: &'a [String],
+    pub category_start: usize,
+    pub search_mode: bool,
+    pub item_count: usize,
+}
+
 impl Layout {
-    pub fn calculate(
-        width: i32,
-        height: i32,
-        dpi: u32,
-        view: View,
-        category_names: &[String],
-        category_start: usize,
-        search_mode: bool,
-    ) -> Self {
+    pub fn calculate(input: LayoutInput<'_>) -> Self {
+        let LayoutInput {
+            width,
+            height,
+            dpi,
+            view,
+            category_names,
+            category_start,
+            search_mode,
+            item_count,
+        } = input;
         let scale = dpi as f32 / 96.0;
         let px = |value: i32| ((value as f32) * scale).round() as i32;
         let client = Rect {
@@ -224,7 +242,7 @@ impl Layout {
             bottom: search_box.bottom,
         };
         let content_top = if search_mode { px(132) } else { px(90) };
-        let content = Rect {
+        let content_full = Rect {
             left: px(8),
             top: content_top,
             right: width - px(8),
@@ -232,10 +250,36 @@ impl Layout {
         };
         let min_cell_width = px(88).max(1);
         let cell_height = px(94).max(1);
+        let scrollbar_width = px(10);
+
+        // Reserve space for the scrollbar only when the items really overflow.
+        let full_columns = (content_full.width() / min_cell_width).max(1) as usize;
+        let full_rows = (content_full.height() / cell_height).max(1) as usize;
+        let scrollbar_visible = view == View::Launcher && item_count > full_columns * full_rows;
+        let content = if scrollbar_visible {
+            Rect {
+                right: content_full.right - scrollbar_width,
+                ..content_full
+            }
+        } else {
+            content_full
+        };
+
         let columns = (content.width() / min_cell_width).max(1) as usize;
         let cell_width = (content.width() / columns as i32).max(1);
         let rows = (content.height() / cell_height).max(1) as usize;
         let visible_capacity = columns * rows;
+        let max_page_offset = if view == View::Launcher {
+            item_count.saturating_sub(visible_capacity)
+        } else {
+            0
+        };
+        let scrollbar_track = Rect {
+            left: content_full.right - scrollbar_width,
+            top: content_full.top,
+            right: content_full.right,
+            bottom: content_full.bottom,
+        };
         let cells = (0..visible_capacity)
             .map(|index| {
                 let column = index % columns;
@@ -393,6 +437,9 @@ impl Layout {
             cells,
             columns,
             visible_capacity,
+            max_page_offset,
+            scrollbar_visible,
+            scrollbar_track,
             settings_content,
             settings_rows,
             add_overlay,
@@ -450,6 +497,46 @@ impl Layout {
             .iter()
             .find_map(|(control, row, _)| row.contains(x, y).then_some(*control))
     }
+
+    /// Geometry of the draggable scrollbar thumb, or `None` when everything fits.
+    pub fn scrollbar_thumb(&self, offset: usize, item_count: usize) -> Option<Rect> {
+        if !self.scrollbar_visible
+            || self.visible_capacity == 0
+            || item_count <= self.visible_capacity
+        {
+            return None;
+        }
+        let track = self.scrollbar_track;
+        let track_height = track.height();
+        if track_height <= 0 {
+            return None;
+        }
+        let minimum = (self.scale * 28.0).round() as i32;
+        let thumb_height = ((track_height as i64 * self.visible_capacity as i64)
+            / item_count.max(1) as i64)
+            .max(minimum as i64)
+            .min(track_height as i64) as i32;
+        let travel = (track_height - thumb_height).max(0);
+        let max_offset = self.max_page_offset.max(1) as i64;
+        let top = track.top + (travel as i64 * offset as i64 / max_offset) as i32;
+        Some(Rect {
+            left: track.left,
+            top,
+            right: track.right,
+            bottom: top + thumb_height,
+        })
+    }
+
+    /// Maps a track position to the closest page offset.
+    pub fn scrollbar_offset_at(&self, y: i32, item_count: usize) -> usize {
+        let Some(thumb) = self.scrollbar_thumb(self.max_page_offset, item_count) else {
+            return 0;
+        };
+        let track = self.scrollbar_track;
+        let travel = (track.height() - thumb.height()).max(1);
+        let relative = (y - track.top - thumb.height() / 2).clamp(0, travel);
+        ((relative as i64 * self.max_page_offset as i64) / travel as i64) as usize
+    }
 }
 
 fn shift_left(rect: Rect, amount: i32) -> Rect {
@@ -469,7 +556,16 @@ mod tests {
         let names = (0..20)
             .map(|index| format!("分类 {index}"))
             .collect::<Vec<_>>();
-        let layout = Layout::calculate(840, 520, 96, View::Launcher, &names, 0, false);
+        let layout = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
         assert!(layout.categories.len() < names.len());
         assert!(layout.category_overflow);
         assert!(layout.category_more.right <= layout.add_category_button.left);
@@ -482,7 +578,16 @@ mod tests {
     #[test]
     fn one_single_category_hides_overflow_navigation() {
         let names = vec!["常用".to_string()];
-        let layout = Layout::calculate(840, 520, 96, View::Launcher, &names, 0, false);
+        let layout = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
         assert!(!layout.category_overflow);
         let center = (
             (layout.category_more.left + layout.category_more.right) / 2,
@@ -497,22 +602,58 @@ mod tests {
     #[test]
     fn search_moves_grid_below_search_box() {
         let names = vec!["常用".to_string()];
-        let normal = Layout::calculate(840, 520, 96, View::Launcher, &names, 0, false);
-        let search = Layout::calculate(840, 520, 96, View::Launcher, &names, 0, true);
+        let normal = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
+        let search = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: true,
+            item_count: 0,
+        });
         assert!(search.content.top > normal.content.top);
         assert!(search.content.top > search.search_box.bottom);
     }
 
     #[test]
     fn settings_have_all_controls() {
-        let layout = Layout::calculate(840, 520, 96, View::Settings, &[], 0, false);
+        let layout = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Settings,
+            category_names: &[],
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
         assert_eq!(layout.settings_rows.len(), 6);
         assert!(layout.settings_rows.last().unwrap().1.bottom <= layout.client.bottom);
     }
 
     #[test]
     fn add_overlay_stays_inside_window() {
-        let layout = Layout::calculate(840, 520, 96, View::Launcher, &["常用".into()], 0, false);
+        let layout = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &["常用".into()],
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
         assert!(
             layout
                 .client
@@ -521,5 +662,60 @@ mod tests {
         assert!(layout.add_overlay.right <= layout.client.right);
         assert!(layout.add_overlay.bottom <= layout.client.bottom);
         assert!(layout.add_drop_zone.top > layout.add_file_button.bottom);
+    }
+
+    #[test]
+    fn scrollbar_only_appears_when_items_overflow() {
+        let names = vec!["常用".to_string()];
+        let few = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count: 3,
+        });
+        assert!(!few.scrollbar_visible);
+        assert_eq!(few.max_page_offset, 0);
+        assert!(few.scrollbar_thumb(0, 3).is_none());
+    }
+
+    #[test]
+    fn scrollbar_and_offset_are_bounded_when_items_overflow() {
+        let names = vec!["常用".to_string()];
+        let reference = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count: 0,
+        });
+        let item_count = reference.visible_capacity + 7;
+        let layout = Layout::calculate(LayoutInput {
+            width: 840,
+            height: 520,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count,
+        });
+        assert!(layout.scrollbar_visible);
+        assert!(layout.max_page_offset > 0);
+        assert_eq!(layout.max_page_offset, item_count - layout.visible_capacity);
+
+        let thumb = layout.scrollbar_thumb(0, item_count).unwrap();
+        assert!(thumb.top >= layout.scrollbar_track.top);
+        assert!(thumb.bottom <= layout.scrollbar_track.bottom);
+        let end = layout
+            .scrollbar_thumb(layout.max_page_offset, item_count)
+            .unwrap();
+        assert!(end.bottom <= layout.scrollbar_track.bottom);
     }
 }

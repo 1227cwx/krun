@@ -1,6 +1,6 @@
 use crate::config::{self, Config, HotkeyConfig};
 use crate::icon_loader::{IconKey, IconLoader};
-use crate::layout::{Layout, SettingControl, ToolButton, View};
+use crate::layout::{Layout, LayoutInput, SettingControl, ToolButton, View};
 use crate::text_input::TextInput;
 use crate::{hotkey, render, search, shell, startup, tray, win};
 use std::collections::HashMap;
@@ -87,6 +87,8 @@ pub struct App {
     /// True when the current selection was moved with the keyboard, so the
     /// persistent highlight is drawn. Mouse interaction relies on hover only.
     pub keyboard_selection: bool,
+    /// True while the scrollbar thumb is being dragged.
+    pub dragging_scrollbar: bool,
     pub input_mode: Option<InputMode>,
     text_input: Option<TextInput>,
     pub tray: Option<tray::TrayIcon>,
@@ -104,15 +106,19 @@ pub struct App {
 impl App {
     pub fn new(config: Config, config_path: PathBuf, persistence_enabled: bool) -> Self {
         let names = category_names(&config);
-        let layout = Layout::calculate(
-            config.window.width,
-            config.window.height,
-            96,
-            View::Launcher,
-            &names,
-            0,
-            false,
-        );
+        let item_count = config.categories[config.active_category_index()]
+            .items
+            .len();
+        let layout = Layout::calculate(LayoutInput {
+            width: config.window.width,
+            height: config.window.height,
+            dpi: 96,
+            view: View::Launcher,
+            category_names: &names,
+            category_start: 0,
+            search_mode: false,
+            item_count,
+        });
         Self {
             hwnd: null_mut(),
             config,
@@ -134,6 +140,7 @@ impl App {
             hovered_item: None,
             pressed_item: None,
             keyboard_selection: false,
+            dragging_scrollbar: false,
             input_mode: None,
             text_input: None,
             tray: None,
@@ -170,27 +177,30 @@ impl App {
         let mut client = RECT::default();
         unsafe { GetClientRect(self.hwnd, &mut client) };
         let names = category_names(&self.config);
-        self.layout = Layout::calculate(
-            client.right - client.left,
-            client.bottom - client.top,
-            self.dpi,
-            self.view,
-            &names,
-            self.category_start,
-            self.search_mode,
-        );
+        let item_count = self.visible_refs().len();
+        self.layout = Layout::calculate(LayoutInput {
+            width: client.right - client.left,
+            height: client.bottom - client.top,
+            dpi: self.dpi,
+            view: self.view,
+            category_names: &names,
+            category_start: self.category_start,
+            search_mode: self.search_mode,
+            item_count,
+        });
         let previous_start = self.category_start;
         self.keep_active_category_visible();
         if self.category_start != previous_start {
-            self.layout = Layout::calculate(
-                client.right - client.left,
-                client.bottom - client.top,
-                self.dpi,
-                self.view,
-                &names,
-                self.category_start,
-                self.search_mode,
-            );
+            self.layout = Layout::calculate(LayoutInput {
+                width: client.right - client.left,
+                height: client.bottom - client.top,
+                dpi: self.dpi,
+                view: self.view,
+                category_names: &names,
+                category_start: self.category_start,
+                search_mode: self.search_mode,
+                item_count,
+            });
         }
         self.clamp_page();
         self.update_text_input_rect();
@@ -378,6 +388,7 @@ impl App {
             startup_enabled: self.startup_enabled,
             hotkey_capture: self.hotkey_capture,
             page_offset: self.page_offset,
+            item_count: self.visible_refs().len(),
             hovered_item: self.hovered_item,
             pressed_item: self.pressed_item,
             keyboard_selection: self.keyboard_selection,
@@ -391,6 +402,9 @@ impl App {
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32) {
+        if self.hit_scrollbar(x, y) {
+            return;
+        }
         let item = self.item_under(x, y);
         self.pressed_item = item;
         self.hovered_item = item;
@@ -398,10 +412,46 @@ impl App {
         self.left_click(x, y);
     }
 
+    /// Handles a press on the scrollbar track or thumb. Returns true when the
+    /// press was consumed, so the item grid should not also handle it.
+    fn hit_scrollbar(&mut self, x: i32, y: i32) -> bool {
+        if self.view != View::Launcher || !self.layout.scrollbar_visible {
+            return false;
+        }
+        let item_count = self.visible_refs().len();
+        let Some(thumb) = self.layout.scrollbar_thumb(self.page_offset, item_count) else {
+            return false;
+        };
+        if thumb.contains(x, y) {
+            self.dragging_scrollbar = true;
+            return true;
+        }
+        if self.layout.scrollbar_track.contains(x, y) {
+            self.dragging_scrollbar = true;
+            self.page_offset = self.layout.scrollbar_offset_at(y, item_count);
+            self.clamp_page();
+            self.redraw();
+            return true;
+        }
+        false
+    }
+
     pub fn mouse_up(&mut self) {
+        self.dragging_scrollbar = false;
         if self.pressed_item.take().is_some() {
             self.redraw();
         }
+    }
+
+    pub fn mouse_drag(&mut self, y: i32) {
+        if !self.dragging_scrollbar {
+            return;
+        }
+        self.page_offset = self
+            .layout
+            .scrollbar_offset_at(y, self.visible_refs().len());
+        self.clamp_page();
+        self.redraw();
     }
 
     fn item_under(&self, x: i32, y: i32) -> Option<usize> {
@@ -536,13 +586,12 @@ impl App {
     }
 
     pub fn wheel(&mut self, delta: i32) {
-        if self.view != View::Launcher {
+        if self.view != View::Launcher || self.layout.max_page_offset == 0 {
             return;
         }
         let step = self.layout.columns.max(1);
         if delta < 0 {
-            self.page_offset =
-                (self.page_offset + step).min(self.visible_refs().len().saturating_sub(1));
+            self.page_offset = (self.page_offset + step).min(self.layout.max_page_offset);
         } else {
             self.page_offset = self.page_offset.saturating_sub(step);
         }
@@ -1184,12 +1233,7 @@ impl App {
     }
 
     fn clamp_page(&mut self) {
-        let count = self.visible_refs().len();
-        if count == 0 {
-            self.page_offset = 0;
-        } else {
-            self.page_offset = self.page_offset.min(count - 1);
-        }
+        self.page_offset = self.page_offset.min(self.layout.max_page_offset);
     }
 
     fn keep_active_category_visible(&mut self) {
