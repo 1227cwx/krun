@@ -4,14 +4,14 @@ use crate::layout::{Layout, Rect, SettingControl, ToolButton, View};
 use crate::win::wide;
 use std::mem::zeroed;
 use std::ptr::null_mut;
-use windows_sys::Win32::Foundation::{COLORREF, HWND, RECT};
+use windows_sys::Win32::Foundation::{COLORREF, HWND, RECT, SIZE};
 use windows_sys::Win32::Graphics::Gdi::{
     AC_SRC_OVER, AlphaBlend, BLENDFUNCTION, BeginPaint, BitBlt, CreateCompatibleBitmap,
     CreateCompatibleDC, CreateFontW, CreatePen, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
     DeleteDC, DeleteObject, DrawTextW, Ellipse, EndPaint, FF_DONTCARE, FW_NORMAL, FillRect,
-    GetStockObject, HDC, HFONT, HGDIOBJ, LineTo, MoveToEx, NULL_BRUSH, OUT_DEFAULT_PRECIS,
-    PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, SRCCOPY, SelectObject, SetBkMode, SetTextColor,
-    TRANSPARENT,
+    GetStockObject, GetTextExtentExPointW, HDC, HFONT, HGDIOBJ, LineTo, MoveToEx, NULL_BRUSH,
+    OUT_DEFAULT_PRECIS, PAINTSTRUCT, PROOF_QUALITY, PS_SOLID, SRCCOPY, SelectObject, SetBkMode,
+    SetTextColor, TRANSPARENT,
 };
 use windows_sys::Win32::UI::WindowsAndMessaging::{DI_NORMAL, DrawIconEx, GetClientRect, HICON};
 
@@ -276,48 +276,25 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
         let global = data.page_offset + local;
         let tile = cell.inset(scaled(data.layout.scale, 3));
         if data.selected == Some(global) {
-            unsafe {
-                fill(hdc, tile, ACCENT_SOFT);
-                frame(hdc, tile, ACCENT, 1);
-            }
+            unsafe { fill(hdc, tile, ACCENT_SOFT) };
         } else if data.hovered_item == Some(global) {
             unsafe { fill(hdc, tile, HOVER) };
         }
         let size = scaled(data.layout.scale, 32);
         let x = cell.left + (cell.width() - size) / 2;
-        let y = cell.top + scaled(data.layout.scale, 12);
-        if item_icon.is_null() {
-            unsafe {
-                frame(
-                    hdc,
-                    Rect {
-                        left: x,
-                        top: y,
-                        right: x + size,
-                        bottom: y + size,
-                    },
-                    BORDER,
-                    1,
-                )
-            };
-        } else {
+        let y = cell.top + scaled(data.layout.scale, 14);
+        if !item_icon.is_null() {
             unsafe { DrawIconEx(hdc, x, y, *item_icon, size, size, 0, null_mut(), DI_NORMAL) };
         }
         let label = Rect {
-            left: cell.left + scaled(data.layout.scale, 4),
+            left: cell.left + scaled(data.layout.scale, 3),
             top: y + size + scaled(data.layout.scale, 8),
-            right: cell.right - scaled(data.layout.scale, 4),
-            bottom: cell.bottom - scaled(data.layout.scale, 4),
+            right: cell.right - scaled(data.layout.scale, 3),
+            bottom: cell.bottom - scaled(data.layout.scale, 3),
         };
         unsafe {
             SelectObject(hdc, small as HGDIOBJ);
-            text(
-                hdc,
-                &item.name,
-                label,
-                TEXT,
-                0x00000001 | 0x00000010 | 0x00000020 | 0x00000004,
-            );
+            draw_wrapped_label(hdc, &item.name, label, data.layout.scale);
             SelectObject(hdc, font as HGDIOBJ);
         }
     }
@@ -950,6 +927,145 @@ fn elide(value: &str, max: usize) -> String {
     }
 }
 
+/// Draws a name centered on as many lines as needed (up to `MAX_LABEL_LINES`),
+/// wrapping by measured pixel width so no character is ever clipped.
+unsafe fn draw_wrapped_label(hdc: HDC, value: &str, rect: Rect, scale: f32) {
+    const MAX_LABEL_LINES: usize = 3;
+    let line_height = scaled(scale, 15);
+    for (index, line) in wrap_text(hdc, value, rect.width(), MAX_LABEL_LINES)
+        .into_iter()
+        .enumerate()
+    {
+        let top = rect.top + index as i32 * line_height;
+        if top + line_height > rect.bottom + line_height {
+            break;
+        }
+        unsafe {
+            text(
+                hdc,
+                &line,
+                Rect {
+                    top,
+                    bottom: top + line_height,
+                    ..rect
+                },
+                TEXT,
+                0x00000001 | 0x00000004 | 0x00000020,
+            );
+        }
+    }
+}
+
+/// Breaks `value` into lines that each fit `max_width` pixels.
+///
+/// Uses `GetTextExtentExPointW` so break points match what GDI renders.
+/// Prefers breaking after a space, then after `-`, `_`, `.`, `/`, and only
+/// breaks inside a token when no separator fits. If the text still overflows
+/// the last line, it is truncated with an ellipsis instead of being clipped.
+fn wrap_text(hdc: HDC, value: &str, max_width: i32, max_lines: usize) -> Vec<String> {
+    if value.is_empty() {
+        return Vec::new();
+    }
+    if max_width <= 0 {
+        return vec![value.to_string()];
+    }
+    let mut remaining: Vec<u16> = value.encode_utf16().collect();
+    let mut lines: Vec<String> = Vec::new();
+    while !remaining.is_empty() && lines.len() < max_lines {
+        let fit = unsafe { text_fit(hdc, &remaining, max_width) }.max(1) as usize;
+        let mut take = fit.min(remaining.len());
+        if take < remaining.len() && is_high_surrogate(remaining[take - 1]) {
+            take = take.saturating_sub(1).max(1);
+        }
+        if take < remaining.len()
+            && let Some(separator) = remaining[..take]
+                .iter()
+                .rposition(|unit| is_break_character(*unit))
+            && separator > 0
+        {
+            take = separator + 1;
+        }
+        let line = String::from_utf16_lossy(&remaining[..take]);
+        lines.push(line.trim_end().to_string());
+        remaining.drain(..take);
+        while remaining.first().is_some_and(|unit| *unit == b' ' as u16) {
+            remaining.remove(0);
+        }
+    }
+    if !remaining.is_empty()
+        && let Some(last) = lines.last_mut()
+    {
+        truncate_with_ellipsis(hdc, last, remaining, max_width);
+    }
+    lines
+}
+
+/// Fits `last` plus as much of `overflow` as possible, ending with an ellipsis.
+fn truncate_with_ellipsis(hdc: HDC, last: &mut String, overflow: Vec<u16>, max_width: i32) {
+    let mut combined: Vec<u16> = last.encode_utf16().collect();
+    combined.extend_from_slice(&overflow);
+    let ellipsis: Vec<u16> = "…".encode_utf16().collect();
+    let budget = max_width.max(1);
+    let fit = unsafe { text_fit(hdc, &combined, budget) }.max(0) as usize;
+    let mut take = fit.min(combined.len());
+    while take > 0 {
+        let mut candidate = combined[..take].to_vec();
+        candidate.extend_from_slice(&ellipsis);
+        if unsafe { text_fit(hdc, &candidate, budget) } as usize >= candidate.len() {
+            *last = String::from_utf16_lossy(&candidate);
+            return;
+        }
+        take -= 1;
+    }
+    *last = "…".to_string();
+}
+
+fn is_break_character(unit: u16) -> bool {
+    matches!(unit, 0x20 | 0x2D | 0x5F | 0x2E | 0x2F | 0x5C | 0x2B | 0x28)
+}
+
+/// Number of UTF-16 units that fit inside `max_width` at the current font.
+unsafe fn text_fit(hdc: HDC, units: &[u16], max_width: i32) -> i32 {
+    let mut fit = 0i32;
+    let mut size = SIZE { cx: 0, cy: 0 };
+    let ok = unsafe {
+        GetTextExtentExPointW(
+            hdc,
+            units.as_ptr(),
+            units.len() as i32,
+            max_width,
+            &mut fit,
+            std::ptr::null_mut(),
+            &mut size,
+        )
+    };
+    if ok == 0 { units.len() as i32 } else { fit }
+}
+
+fn is_high_surrogate(unit: u16) -> bool {
+    (0xD800..0xDC00).contains(&unit)
+}
+
 fn scaled(scale: f32, value: i32) -> i32 {
     (scale * value as f32).round() as i32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_break_character;
+
+    #[test]
+    fn separators_are_preferred_break_points() {
+        for unit in *b" -_./\\+(" {
+            assert!(is_break_character(unit as u16));
+        }
+    }
+
+    #[test]
+    fn cjk_and_letters_are_not_break_points() {
+        assert!(!is_break_character('中' as u16));
+        assert!(!is_break_character('A' as u16));
+        assert!(!is_break_character('9' as u16));
+        assert!(!is_break_character('a' as u16));
+    }
 }

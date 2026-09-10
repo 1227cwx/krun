@@ -230,9 +230,10 @@ impl Layout {
             right: width - px(16),
             bottom: height - px(16),
         };
-        let cell_width = px(92).max(1);
-        let cell_height = px(88).max(1);
-        let columns = (content.width() / cell_width).max(1) as usize;
+        let min_cell_width = px(92).max(1);
+        let cell_height = px(112).max(1);
+        let columns = (content.width() / min_cell_width).max(1) as usize;
+        let cell_width = (content.width() / columns as i32).max(1);
         let rows = (content.height() / cell_height).max(1) as usize;
         let visible_capacity = columns * rows;
         let cells = (0..visible_capacity)
