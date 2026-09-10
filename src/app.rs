@@ -83,6 +83,7 @@ pub struct App {
     pub add_overlay_open: bool,
     pub modal_open: bool,
     pub hovered_item: Option<usize>,
+    pub pressed_item: Option<usize>,
     pub input_mode: Option<InputMode>,
     text_input: Option<TextInput>,
     pub tray: Option<tray::TrayIcon>,
@@ -128,6 +129,7 @@ impl App {
             add_overlay_open: false,
             modal_open: false,
             hovered_item: None,
+            pressed_item: None,
             input_mode: None,
             text_input: None,
             tray: None,
@@ -373,6 +375,7 @@ impl App {
             hotkey_capture: self.hotkey_capture,
             page_offset: self.page_offset,
             hovered_item: self.hovered_item,
+            pressed_item: self.pressed_item,
             add_overlay_open: self.add_overlay_open,
             text_overlay_title: self.input_title(),
             content_progress: self.content_progress(),
@@ -380,6 +383,26 @@ impl App {
             hwnd: self.hwnd,
         };
         unsafe { render::paint(self.hwnd, &data) };
+    }
+
+    pub fn mouse_down(&mut self, x: i32, y: i32) {
+        self.pressed_item = self.item_under(x, y);
+        self.left_click(x, y);
+    }
+
+    pub fn mouse_up(&mut self) {
+        if self.pressed_item.take().is_some() {
+            self.redraw();
+        }
+    }
+
+    fn item_under(&self, x: i32, y: i32) -> Option<usize> {
+        if self.view != View::Launcher || self.add_overlay_open {
+            return None;
+        }
+        let local = self.layout.item_at(x, y)?;
+        let global = self.page_offset + local;
+        (global < self.visible_refs().len()).then_some(global)
     }
 
     pub fn left_click(&mut self, x: i32, y: i32) {
@@ -473,7 +496,9 @@ impl App {
     }
 
     pub fn mouse_leave(&mut self) {
-        if self.hovered_item.take().is_some() {
+        let had_hover = self.hovered_item.take().is_some();
+        let had_press = self.pressed_item.take().is_some();
+        if had_hover || had_press {
             self.redraw();
         }
     }

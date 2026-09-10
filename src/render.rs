@@ -22,12 +22,13 @@ const SURFACE: COLORREF = 0x00ffffff;
 const SOFT: COLORREF = 0x00f6f6f6;
 const BORDER: COLORREF = 0x00d7d2cb;
 const OUTER_BORDER: COLORREF = 0x009f9a92;
-const HOVER: COLORREF = 0x00f7f3ed;
+const HOVER: COLORREF = 0x00eae7e1;
+const PRESSED: COLORREF = 0x00d5d0c7;
 const OVERLAY_SHADE: COLORREF = 0x00e8e5e0;
 const TEXT: COLORREF = 0x00302f2d;
 const MUTED: COLORREF = 0x00817e78;
 const ACCENT: COLORREF = 0x008b7b1d;
-const ACCENT_SOFT: COLORREF = 0x00f2eee0;
+const ACCENT_SOFT: COLORREF = 0x00d8e9ec;
 const DISABLED: COLORREF = 0x00bbb8b2;
 
 pub struct RenderData<'a> {
@@ -43,6 +44,7 @@ pub struct RenderData<'a> {
     pub hotkey_capture: bool,
     pub page_offset: usize,
     pub hovered_item: Option<usize>,
+    pub pressed_item: Option<usize>,
     pub add_overlay_open: bool,
     pub text_overlay_title: Option<&'static str>,
     pub content_progress: f32,
@@ -268,7 +270,9 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
     {
         let global = data.page_offset + local;
         let tile = cell.inset(scaled(data.layout.scale, 3));
-        if data.selected == Some(global) {
+        if data.pressed_item == Some(global) {
+            unsafe { fill(hdc, tile, PRESSED) };
+        } else if data.selected == Some(global) {
             unsafe { fill(hdc, tile, ACCENT_SOFT) };
         } else if data.hovered_item == Some(global) {
             unsafe { fill(hdc, tile, HOVER) };

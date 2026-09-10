@@ -48,7 +48,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     SW_HIDE, SetWindowLongPtrW, ShowWindow, TranslateMessage, WM_ACTIVATE, WM_APP, WM_CHAR,
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES,
     WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_PAINT,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_PAINT,
     WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_ACCEPTFILES,
     WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
@@ -243,7 +243,11 @@ unsafe extern "system" fn window_proc(
         }
         WM_LBUTTONDOWN => {
             let (x, y) = app::client_point(lparam);
-            app.left_click(x, y);
+            app.mouse_down(x, y);
+            0
+        }
+        WM_LBUTTONUP => {
+            app.mouse_up();
             0
         }
         WM_LBUTTONDBLCLK => {
