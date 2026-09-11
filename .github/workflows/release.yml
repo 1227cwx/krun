@@ -53,5 +53,5 @@ jobs:
         run: |
           gh release view $env:RELEASE_TAG --json tagName 2>$null
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists; refusing to replace assets' }
-          gh release create $env:RELEASE_TAG "KRun-$($env:RELEASE_TAG)-windows-x64.zip" SHA256SUMS --verify-tag --title "KRun $($env:RELEASE_TAG) · 原生便携启动器" --notes-file .github/release-notes.txt
+          gh release create $env:RELEASE_TAG "KRun-$($env:RELEASE_TAG)-windows-x64.zip" SHA256SUMS --verify-tag --title "KRun $($env:RELEASE_TAG)" --notes-file .github/release-notes.txt
           if ($LASTEXITCODE) { exit $LASTEXITCODE }
