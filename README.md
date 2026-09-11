@@ -1,20 +1,22 @@
 <div align="center">
   <img src="assets/krun.png" width="128" alt="KRun logo">
   <h1>KRun</h1>
-  <p><strong>轻量 · 极简 · 极速响应 · 极低资源占用</strong></p>
+  <p><strong>原生 · 极简 · 便携 · 开源</strong></p>
   <p>一个使用 Rust 和原生 Win32 API 构建的开源 Windows 分类启动器。</p>
 
   <p>
     <img alt="Windows" src="https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows">
     <img alt="Rust" src="https://img.shields.io/badge/Rust-2024-000000?logo=rust">
     <img alt="License" src="https://img.shields.io/badge/license-MIT-168393">
-    <img alt="Release size" src="https://img.shields.io/badge/x64%20EXE-%3C%201%20MiB-168393">
+    <a href="https://github.com/1227cwx/krun/releases" target="_blank" rel="noopener"><img alt="下载便携版" src="https://img.shields.io/badge/下载-便携版-168393"></a>
   </p>
 </div>
 
 KRun 用一个快捷键呼出你的应用、文件、文件夹与快捷方式。它不依赖 Electron、WebView 或额外 GUI 运行环境，配置与程序放在一起，解压即可使用。
 
 ## 预览
+
+以下三张截图均来自当前发布构建的真实 Windows 窗口，使用临时目录中的公开示例配置；不包含个人启动项。官网静态源码位于 [`docs/`](docs/index.html)，提供分类、搜索与设置的交互模拟。
 
 <p align="center">
   <img src="docs/images/krun-launcher.png" width="840" alt="KRun launcher">
@@ -29,9 +31,9 @@ KRun 用一个快捷键呼出你的应用、文件、文件夹与快捷方式。
 
 ## 为什么选择 KRun
 
-- **轻量原生**：Rust + Win32/GDI，发布文件不到 1 MiB，无浏览器内核。
-- **极速响应**：全局快捷键呼出，分类与搜索完全在内存中完成。
-- **低资源占用**：单线程消息循环；系统图标按需异步加载并缓存。
+- **轻量原生**：Rust + Win32/GDI，无浏览器内核或额外 GUI 运行环境。
+- **快捷呼出**：全局快捷键唤起，分类与搜索在内存中完成。
+- **按需加载**：Win32 消息循环；系统图标异步加载并缓存。
 - **极简操作**：分类、拖放、搜索和右键操作都集中在一个启动板中。
 - **便携配置**：`launcher.json` 固定保存在 EXE 同目录，不依赖安装器。
 - **开放源码**：使用 [MIT License](LICENSE)，可以自由使用、修改和分发。
@@ -93,6 +95,10 @@ KRun 是便携软件，不需要安装。
 > KRun 会在 EXE 同目录创建 `launcher.json`。请不要把程序放在当前用户没有写权限的目录中。
 
 当前项目尚未提供自动更新器。未签名的本地构建可能触发 Windows SmartScreen 提示。
+
+发布包只包含 `KRun.exe` 与 `LICENSE`，不附带任何 `launcher.json`。下载同一 Release 的 `SHA256SUMS` 后，可在 PowerShell 中运行 `Get-FileHash .\KRun-*-windows-x64.zip -Algorithm SHA256`，与校验文件中的值逐字比较。升级时先退出托盘中的 KRun，再替换 EXE，保留原目录中的配置。
+
+CPU、内存和响应时间尚未进行可复现基准测量，本项目不宣称具体性能数值。
 
 ## 键盘操作
 
@@ -199,10 +205,10 @@ build-release.ps1       发布构建脚本
 
 ## 路线图
 
-- Windows CI：格式、Clippy、测试和 Release 构建
 - 可复现的冷启动、热键响应、内存和 CPU 基准
 - 更完整的主题与可访问性支持
-- GitHub Release 自动打包和校验文件
+
+仓库已包含 Windows 发布工作流（格式、Clippy、测试、Release 打包和 SHA-256 校验）以及 GitHub Pages 工作流。Pages 是否可启用取决于仓库当前可见性及账户计划，发布状态以 GitHub Actions 为准。
 
 ## 贡献
 

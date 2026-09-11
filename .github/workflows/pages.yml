@@ -1,0 +1,41 @@
+name: Official website
+on:
+  push:
+    branches: [main]
+    paths: ['docs/**', '.github/workflows/pages.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+concurrency:
+  group: pages
+  cancel-in-progress: false
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+      - name: Verify live website
+        env:
+          PAGE_URL: ${{ steps.deployment.outputs.page_url }}
+        run: |
+          for attempt in $(seq 1 12); do
+            if curl --fail --silent --show-error "$PAGE_URL" -o /tmp/krun-live.html && grep -q '少一点寻找' /tmp/krun-live.html; then
+              curl --fail --silent --show-error "${PAGE_URL}images/krun-launcher.png" -o /tmp/krun-live.png
+              cmp docs/images/krun-launcher.png /tmp/krun-live.png
+              exit 0
+            fi
+            sleep 10
+          done
+          exit 1

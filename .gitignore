@@ -4,4 +4,6 @@
 /release/QuickLaunch.exe
 /release/launcher.json
 /release/launcher.json.tmp
+/release/KRun-*-windows-x64.zip
+/release/SHA256SUMS
 *.pdb

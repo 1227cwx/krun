@@ -1,0 +1,26 @@
+KRun v0.1.0 · 原生便携启动器
+
+本次发布汇总当前 main 上的启动器功能与界面改进。
+
+功能与改进
+- Rust + Win32/GDI 原生 Windows 分类启动板，默认 Alt + Q 呼出。
+- 支持添加程序、快捷方式、文件和文件夹；分类管理、拖放、名称与路径搜索、键盘导航。
+- 搜索栏、网格间距与名称换行经过调整；悬停、按压和释放状态更明确。
+- 项目溢出时才显示细圆角滚动条，内容不溢出时保持简洁。
+- 修复最小窗口尺寸下设置行不可见的问题。
+- 支持热键、双击运行、开机启动、居中、移动与尺寸调整设置。
+- 新增官方静态网站源码及交互模拟；README 三张截图更新为本构建真实窗口，使用独立公开示例配置。
+
+下载与校验
+- KRun-v0.1.0-windows-x64.zip：Windows 10/11 x64 便携包，仅含 KRun.exe 和 LICENSE。
+- SHA256SUMS：压缩包 SHA-256 校验值，可用 PowerShell Get-FileHash 核对。
+- 解压到可写目录后运行 KRun.exe；程序在同目录保存 launcher.json。本发布不包含个人配置。
+- 升级前从托盘退出 KRun，再替换 EXE，保留已有 launcher.json。
+
+已知说明
+- 未签名，Windows SmartScreen 可能提示；当前没有自动更新器。
+- 搜索只覆盖已添加的项目，不扫描全盘。
+- CPU、内存与响应时间未做可复现基准测量，不提供未经验证的性能数值。
+- 官网部署状态请以仓库 Pages 与 Actions 实际结果为准。
+
+验证：cargo fmt --check、cargo clippy --all-targets -- -D warnings、cargo test（25 项通过）及发布构建。
