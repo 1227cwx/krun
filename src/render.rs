@@ -29,7 +29,6 @@ const TEXT: COLORREF = 0x00302f2d;
 const MUTED: COLORREF = 0x00817e78;
 const ACCENT: COLORREF = 0x008b7b1d;
 const ACCENT_SOFT: COLORREF = 0x00d8e9ec;
-const DISABLED: COLORREF = 0x00bbb8b2;
 
 pub struct RenderData<'a> {
     pub config: &'a Config,
@@ -126,7 +125,7 @@ pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
             draw_icon(
                 memory,
                 data.layout.add_button,
-                ToolButton::AddItem,
+                ToolButton::AddMenu,
                 MUTED,
                 data.layout.scale,
             );
@@ -246,13 +245,6 @@ unsafe fn paint_launcher(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
                 data.layout.scale,
             );
         }
-        draw_icon(
-            hdc,
-            data.layout.add_category_button,
-            ToolButton::AddCategory,
-            ACCENT,
-            data.layout.scale,
-        );
     }
 
     if data.search_mode {
@@ -474,26 +466,19 @@ unsafe fn paint_settings(hdc: HDC, data: &RenderData<'_>, font: HFONT, small: HF
     }
 }
 
-/// Draws a native Windows themed checkbox so it matches Explorer and Settings.
+/// Query the theme at the window's DPI; never stretch a nominal checkbox bitmap.
 unsafe fn system_checkbox(hdc: HDC, hwnd: HWND, rect: Rect, checked: bool, disabled: bool) {
     use windows_sys::Win32::UI::Controls::{
         BP_CHECKBOX, CBS_CHECKEDDISABLED, CBS_CHECKEDNORMAL, CBS_UNCHECKEDDISABLED,
-        CBS_UNCHECKEDNORMAL, CloseThemeData, DrawThemeBackground, OpenThemeData,
+        CBS_UNCHECKEDNORMAL, CloseThemeData, DrawThemeBackground, GetThemePartSize, OpenThemeData,
+        TS_TRUE,
     };
-    const VSCLASS_BUTTON: &str = "Button";
-
-    let size = (rect.height().min(rect.width())).max(1);
-    let square = Rect {
-        left: rect.right - size,
-        top: rect.top + (rect.height() - size) / 2,
-        right: rect.right,
-        bottom: rect.top + (rect.height() + size) / 2,
-    };
-    let class = wide(VSCLASS_BUTTON);
-    let theme = unsafe { OpenThemeData(hwnd, class.as_ptr()) };
+    use windows_sys::Win32::UI::HiDpi::{GetDpiForWindow, OpenThemeDataForDpi};
+    let dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
+    let class = wide("Button");
+    let mut theme = unsafe { OpenThemeDataForDpi(hwnd, class.as_ptr(), dpi) };
     if theme == 0 {
-        unsafe { fallback_checkbox(hdc, square, checked, disabled) };
-        return;
+        theme = unsafe { OpenThemeData(hwnd, class.as_ptr()) };
     }
     let state = match (checked, disabled) {
         (true, true) => CBS_CHECKEDDISABLED,
@@ -501,53 +486,58 @@ unsafe fn system_checkbox(hdc: HDC, hwnd: HWND, rect: Rect, checked: bool, disab
         (false, true) => CBS_UNCHECKEDDISABLED,
         (false, false) => CBS_UNCHECKEDNORMAL,
     };
-    let native = RECT {
-        left: square.left,
-        top: square.top,
-        right: square.right,
-        bottom: square.bottom,
+    if theme != 0 {
+        let mut size = SIZE::default();
+        let result = unsafe {
+            GetThemePartSize(
+                theme,
+                hdc,
+                BP_CHECKBOX,
+                state,
+                std::ptr::null(),
+                TS_TRUE,
+                &mut size,
+            )
+        };
+        if result >= 0 && size.cx > 0 && size.cy > 0 {
+            let native = centered_control(rect, size.cx, size.cy);
+            let result = unsafe {
+                DrawThemeBackground(theme, hdc, BP_CHECKBOX, state, &native, std::ptr::null())
+            };
+            unsafe { CloseThemeData(theme) };
+            if result >= 0 {
+                return;
+            }
+        } else {
+            unsafe { CloseThemeData(theme) };
+        }
+    }
+    // Classic Windows fallback retains system colors, disabled state and check mark.
+    use windows_sys::Win32::Graphics::Gdi::{
+        DFC_BUTTON, DFCS_BUTTONCHECK, DFCS_CHECKED, DFCS_INACTIVE, DrawFrameControl,
     };
+    let size = (13 * dpi / 96) as i32;
+    let mut native = centered_control(rect, size, size);
     unsafe {
-        DrawThemeBackground(theme, hdc, BP_CHECKBOX, state, &native, std::ptr::null());
-        CloseThemeData(theme);
+        DrawFrameControl(
+            hdc,
+            &mut native,
+            DFC_BUTTON,
+            DFCS_BUTTONCHECK
+                | if checked { DFCS_CHECKED } else { 0 }
+                | if disabled { DFCS_INACTIVE } else { 0 },
+        );
     }
 }
 
-/// Fallback box used only when the system theme service is unavailable.
-unsafe fn fallback_checkbox(hdc: HDC, square: Rect, checked: bool, disabled: bool) {
-    let color = if disabled {
-        DISABLED
-    } else if checked {
-        ACCENT
-    } else {
-        BORDER
-    };
-    unsafe {
-        if checked {
-            fill(hdc, square, color);
-            let size = square.height();
-            line(
-                hdc,
-                square.left + size / 4,
-                square.top + size / 2,
-                square.left + size / 2,
-                square.bottom - size / 4,
-                SURFACE,
-                2,
-            );
-            line(
-                hdc,
-                square.left + size / 2,
-                square.bottom - size / 4,
-                square.right - size / 5,
-                square.top + size / 4,
-                SURFACE,
-                2,
-            );
-        } else {
-            fill(hdc, square, SURFACE);
-            frame(hdc, square, color, 1);
-        }
+fn centered_control(rect: Rect, width: i32, height: i32) -> RECT {
+    let left = rect.left + (rect.width() - width) / 2;
+    let top = rect.top + (rect.height() - height) / 2;
+    RECT {
+        left,
+        top,
+        right: left + width,
+        bottom: top + height,
     }
 }
 
@@ -664,7 +654,7 @@ unsafe fn draw_icon(hdc: HDC, rect: Rect, kind: ToolButton, color: COLORREF, sca
                 1,
             );
         },
-        ToolButton::AddItem | ToolButton::AddCategory => unsafe {
+        ToolButton::AddMenu => unsafe {
             line(hdc, cx - r, cy, cx + r, cy, color, 1);
             line(hdc, cx, cy - r, cx, cy + r, color, 1);
         },
@@ -685,14 +675,7 @@ unsafe fn draw_icon(hdc: HDC, rect: Rect, kind: ToolButton, color: COLORREF, sca
             fill_circle(hdc, cx, cy, 2, color);
             fill_circle(hdc, cx + r, cy, 2, color);
         },
-        ToolButton::Settings => unsafe {
-            ellipse_outline(hdc, cx - r, cy - r, cx + r, cy + r, color);
-            fill_circle(hdc, cx, cy, 2, color);
-            line(hdc, cx - r - 2, cy, cx - r + 2, cy, color, 1);
-            line(hdc, cx + r - 2, cy, cx + r + 2, cy, color, 1);
-            line(hdc, cx, cy - r - 2, cx, cy - r + 2, color, 1);
-            line(hdc, cx, cy + r - 2, cx, cy + r + 2, color, 1);
-        },
+        ToolButton::Settings => unsafe { draw_gear(hdc, rect, color, scale) },
     }
 }
 
@@ -705,16 +688,11 @@ unsafe fn toggle(
     scale: f32,
     accent: COLORREF,
 ) {
-    let width = scaled(scale, 40);
-    let height = scaled(scale, 20);
-    let left = rect.right - width;
-    let top = rect.top + (rect.height() - height) / 2;
-    let body = Rect {
-        left,
-        top,
-        right: left + width,
-        bottom: top + height,
+    let Some(graphics) = (unsafe { SmoothGraphics::new(hdc) }) else {
+        return;
     };
+    let x = rect.right as f32 - 40.0 * scale;
+    let y = (rect.top + rect.bottom) as f32 / 2.0 - 10.0 * scale;
     let track = if disabled {
         0x00e6e2dd
     } else if checked {
@@ -722,22 +700,139 @@ unsafe fn toggle(
     } else {
         0x00c9c6c1
     };
-    let knob_radius = height / 2 - scaled(scale, 3);
-    let center_y = (body.top + body.bottom) / 2;
     unsafe {
-        rounded_fill(hdc, body, track, height / 2);
-        let knob_color = if disabled { 0x00f2f0ee } else { SURFACE };
-        let knob_x = if checked {
-            body.right - height / 2
-        } else {
-            body.left + height / 2
+        graphics.capsule(x, y, 40.0 * scale, 20.0 * scale, track);
+        graphics.ellipse(
+            x + if checked { 23.0 } else { 3.0 } * scale,
+            y + 3.0 * scale,
+            14.0 * scale,
+            14.0 * scale,
+            if disabled { 0x00f2f0ee } else { SURFACE },
+        );
+    }
+}
+
+// Windows GDI+ provides 8x8 coverage antialiasing at fractional DPI without
+// a GUI runtime, a bundled dependency or scaling a low-resolution bitmap.
+use windows_sys::Win32::Graphics::GdiPlus::*;
+
+struct SmoothGraphics {
+    graphics: *mut GpGraphics,
+    token: usize,
+}
+
+impl SmoothGraphics {
+    unsafe fn new(hdc: HDC) -> Option<Self> {
+        let input = GdiplusStartupInput {
+            GdiplusVersion: 1,
+            ..unsafe { zeroed() }
         };
-        if disabled {
-            fill_circle(hdc, knob_x, center_y, knob_radius, knob_color);
-        } else {
-            fill_circle(hdc, knob_x, center_y, knob_radius + 1, 0x001a1a1a);
-            fill_circle(hdc, knob_x, center_y, knob_radius, knob_color);
+        let mut token = 0;
+        if unsafe { GdiplusStartup(&mut token, &input, null_mut()) } != 0 {
+            return None;
         }
+        let mut graphics = null_mut();
+        if unsafe { GdipCreateFromHDC(hdc, &mut graphics) } != 0 {
+            unsafe { GdiplusShutdown(token) };
+            return None;
+        }
+        unsafe {
+            GdipSetSmoothingMode(graphics, SmoothingModeAntiAlias8x8);
+        }
+        Some(Self { graphics, token })
+    }
+
+    unsafe fn ellipse(&self, x: f32, y: f32, w: f32, h: f32, color: COLORREF) {
+        let mut brush = null_mut();
+        if unsafe { GdipCreateSolidFill(argb(color), &mut brush) } == 0 {
+            unsafe {
+                GdipFillEllipse(self.graphics, brush.cast(), x, y, w, h);
+                GdipDeleteBrush(brush.cast());
+            }
+        }
+    }
+
+    unsafe fn capsule(&self, x: f32, y: f32, w: f32, h: f32, color: COLORREF) {
+        let mut path = null_mut();
+        if unsafe { GdipCreatePath(FillModeAlternate, &mut path) } != 0 {
+            return;
+        }
+        let mut brush = null_mut();
+        unsafe {
+            GdipAddPathArc(path, x, y, h, h, 90.0, 180.0);
+            GdipAddPathArc(path, x + w - h, y, h, h, 270.0, 180.0);
+            GdipClosePathFigure(path);
+            if GdipCreateSolidFill(argb(color), &mut brush) == 0 {
+                GdipFillPath(self.graphics, brush.cast(), path);
+                GdipDeleteBrush(brush.cast());
+            }
+            GdipDeletePath(path);
+        }
+    }
+}
+
+impl Drop for SmoothGraphics {
+    fn drop(&mut self) {
+        unsafe {
+            GdipDeleteGraphics(self.graphics);
+            GdiplusShutdown(self.token);
+        }
+    }
+}
+
+fn argb(color: COLORREF) -> u32 {
+    0xff000000 | ((color & 0xff) << 16) | (color & 0xff00) | ((color >> 16) & 0xff)
+}
+
+// Eight flat-topped teeth, using the same polar profile as docs/app.js.
+fn gear_points(cx: f32, cy: f32, scale: f32) -> Vec<PointF> {
+    (0..8)
+        .flat_map(|tooth| {
+            [
+                (-22.5_f32, 7.0_f32),
+                (-13.0, 7.0),
+                (-10.0, 9.0),
+                (10.0, 9.0),
+                (13.0, 7.0),
+            ]
+            .map(move |(offset, radius)| {
+                let angle = (tooth as f32 * 45.0 + offset - 90.0).to_radians();
+                PointF {
+                    X: cx + radius * scale * angle.cos(),
+                    Y: cy + radius * scale * angle.sin(),
+                }
+            })
+        })
+        .collect()
+}
+
+unsafe fn draw_gear(hdc: HDC, rect: Rect, color: COLORREF, scale: f32) {
+    let Some(graphics) = (unsafe { SmoothGraphics::new(hdc) }) else {
+        return;
+    };
+    let cx = (rect.left + rect.right) as f32 / 2.0;
+    let cy = (rect.top + rect.bottom) as f32 / 2.0;
+    let points = gear_points(cx, cy, scale);
+    let mut path = null_mut();
+    if unsafe { GdipCreatePath(FillModeAlternate, &mut path) } != 0 {
+        return;
+    }
+    let mut pen = null_mut();
+    unsafe {
+        GdipAddPathPolygon(path, points.as_ptr(), points.len() as i32);
+        GdipAddPathEllipse(
+            path,
+            cx - 3.0 * scale,
+            cy - 3.0 * scale,
+            6.0 * scale,
+            6.0 * scale,
+        );
+        if GdipCreatePen1(argb(color), scale, UnitPixel, &mut pen) == 0 {
+            GdipSetPenLineJoin(pen, LineJoinRound);
+            GdipDrawPath(graphics.graphics, pen, path);
+            GdipDeletePen(pen);
+        }
+        GdipDeletePath(path);
     }
 }
 
@@ -1081,5 +1176,49 @@ mod tests {
         assert!(!is_break_character('A' as u16));
         assert!(!is_break_character('9' as u16));
         assert!(!is_break_character('a' as u16));
+    }
+}
+
+#[cfg(test)]
+mod control_tests {
+    use super::*;
+
+    #[test]
+    fn gear_has_eight_distinct_teeth_and_scales_symmetrically() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let points = gear_points(20.0 * scale, 20.0 * scale, scale);
+            assert_eq!(points.len(), 40);
+            let mut tips = 0;
+            for (i, p) in points.iter().enumerate() {
+                let radius =
+                    ((p.X - 20.0 * scale).powi(2) + (p.Y - 20.0 * scale).powi(2)).sqrt() / scale;
+                assert!((7.0 - 0.001..=9.0 + 0.001).contains(&radius));
+                if radius > 8.0 {
+                    tips += 1;
+                }
+                let opposite = &points[(i + 20) % 40];
+                assert!((p.X + opposite.X - 40.0 * scale).abs() < 0.001);
+                assert!((p.Y + opposite.Y - 40.0 * scale).abs() < 0.001);
+            }
+            assert_eq!(tips, 16); // Two outer corners per flat tooth.
+        }
+    }
+
+    #[test]
+    fn themed_checkbox_preserves_true_size_and_control_center() {
+        for dpi in [96, 120, 144, 192] {
+            let rect = Rect {
+                left: 0,
+                top: 0,
+                right: 40 * dpi / 96,
+                bottom: 20 * dpi / 96,
+            };
+            let size = 13 * dpi / 96;
+            let native = centered_control(rect, size, size);
+            assert_eq!(native.right - native.left, size);
+            assert_eq!(native.bottom - native.top, size);
+            assert!((native.left + native.right - rect.width()).abs() <= 1);
+            assert!((native.top + native.bottom - rect.height()).abs() <= 1);
+        }
     }
 }

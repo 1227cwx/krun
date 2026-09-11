@@ -1025,11 +1025,7 @@ impl App {
                     self.enter_search();
                 }
             }
-            ToolButton::AddItem => {
-                self.add_overlay_open = true;
-                self.selected = None;
-                self.start_content_transition();
-            }
+            ToolButton::AddMenu => self.show_add_menu(),
             ToolButton::Settings => {
                 self.close_search();
                 self.view = View::Settings;
@@ -1040,7 +1036,6 @@ impl App {
                 self.relayout();
                 self.start_content_transition();
             }
-            ToolButton::AddCategory => self.create_category(),
             ToolButton::CategoryLeft => {
                 self.category_start = self.category_start.saturating_sub(1);
                 self.relayout();
@@ -1054,6 +1049,49 @@ impl App {
                 }
             }
             ToolButton::CategoryMore => self.show_all_categories_menu(),
+        }
+    }
+
+    fn show_add_menu(&mut self) {
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
+        }
+        append(menu, ITEM_NEW, "添加项目");
+        append(menu, CATEGORY_NEW, "新建分类");
+        let mut anchor = POINT {
+            x: self.layout.add_button.right,
+            y: self.layout.add_button.bottom,
+        };
+        self.modal_open = true;
+        let command = unsafe {
+            windows_sys::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut anchor);
+            SetForegroundWindow(self.hwnd);
+            let command = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | windows_sys::Win32::UI::WindowsAndMessaging::TPM_RIGHTALIGN,
+                anchor.x,
+                anchor.y,
+                0,
+                self.hwnd,
+                null(),
+            ) as u32;
+            DestroyMenu(menu);
+            command
+        };
+        self.modal_open = false;
+        self.apply_add_command(command);
+    }
+
+    fn apply_add_command(&mut self, command: u32) {
+        match command {
+            ITEM_NEW => {
+                self.add_overlay_open = true;
+                self.selected = None;
+                self.start_content_transition();
+            }
+            CATEGORY_NEW => self.create_category(),
+            _ => {}
         }
     }
 
@@ -1613,7 +1651,22 @@ pub fn apply_dpi_rect(hwnd: HWND, rect: *const RECT) {
 
 #[cfg(test)]
 mod tests {
-    use super::should_launch_on_single_click;
+    use super::*;
+
+    #[test]
+    fn combined_add_menu_routes_items_categories_and_cancel() {
+        let mut app = App::new(Config::default(), std::path::PathBuf::new(), false);
+        app.apply_add_command(0);
+        assert!(!app.add_overlay_open);
+        assert!(app.input_mode.is_none());
+        app.apply_add_command(ITEM_NEW);
+        assert!(app.add_overlay_open);
+        assert!(app.input_mode.is_none());
+        app.add_overlay_open = false;
+        app.apply_add_command(CATEGORY_NEW);
+        assert!(!app.add_overlay_open);
+        assert!(matches!(app.input_mode, Some(InputMode::NewCategory)));
+    }
 
     #[test]
     fn single_click_only_launches_when_double_click_is_disabled() {

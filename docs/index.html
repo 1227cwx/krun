@@ -34,10 +34,14 @@
               <span id="window-title">KRun</span>
               <div class="title-tools">
                 <button id="search-button" class="tool" aria-label="搜索" title="搜索" aria-expanded="false" aria-controls="search-bar" data-icon="search"></button>
-                <button id="add-button" class="tool" aria-label="添加项目" title="添加项目" data-icon="plus"></button>
+                <button id="add-button" class="tool" aria-label="添加" title="添加" aria-haspopup="menu" aria-expanded="false" aria-controls="add-menu" data-icon="plus"></button>
                 <button id="settings-button" class="tool" aria-label="设置" title="设置" aria-expanded="false" aria-controls="settings-view" data-icon="settings"></button>
                 <button id="close-button" class="tool close" aria-label="关闭演示窗口" title="关闭" data-icon="close"></button>
               </div>
+            </div>
+            <div id="add-menu" role="menu" aria-label="添加" hidden>
+              <button id="add-menu-item" role="menuitem" type="button">添加项目</button>
+              <button id="add-menu-category" role="menuitem" type="button">新建分类</button>
             </div>
             <div id="launcher-view">
               <div class="categorybar">
@@ -46,7 +50,6 @@
                   <button id="category-left" class="tool" aria-label="上一组分类" data-icon="back" hidden></button>
                   <button id="category-right" class="tool" aria-label="下一组分类" data-icon="right" hidden></button>
                   <button id="category-more" class="tool" aria-label="所有分类" aria-expanded="false" aria-controls="category-menu" data-icon="more" hidden></button>
-                  <button id="category-add" class="tool" aria-label="添加分类" title="添加分类" data-icon="plus"></button>
                 </div>
               </div>
               <div id="category-menu" role="menu" aria-label="所有分类" hidden></div>
@@ -73,7 +76,7 @@
               <div id="drop-zone">也可以把程序、快捷方式、文件或文件夹拖到这里</div>
             </div>
             <form id="category-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="category-title" hidden>
-              <h2 id="category-title">添加分类</h2>
+              <h2 id="category-title">新建分类</h2>
               <input id="category-name" aria-label="分类名称" maxlength="30" required autocomplete="off">
               <div class="dialog-actions"><button class="accent" type="submit">确定</button><button id="category-cancel" type="button">取消</button></div>
             </form>

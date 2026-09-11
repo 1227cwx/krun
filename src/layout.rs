@@ -39,10 +39,9 @@ pub enum View {
 pub enum ToolButton {
     Back,
     Search,
-    AddItem,
+    AddMenu,
     Settings,
     Close,
-    AddCategory,
     CategoryLeft,
     CategoryRight,
     CategoryMore,
@@ -72,7 +71,6 @@ pub struct Layout {
     pub add_button: Rect,
     pub settings_button: Rect,
     pub close_button: Rect,
-    pub add_category_button: Rect,
     pub category_left: Rect,
     pub category_right: Rect,
     pub category_more: Rect,
@@ -187,7 +185,7 @@ impl Layout {
             bottom: px(88),
         };
         let mini = px(34);
-        let add_category_button = Rect {
+        let category_more = Rect {
             left: width - mini - px(8),
             top: px(50),
             right: width - px(8),
@@ -200,14 +198,13 @@ impl Layout {
                 px((chars * 16 + 30).clamp(72, 156)) + px(2)
             })
             .sum::<i32>();
-        let category_overflow = total_tab_width > add_category_button.left - px(22);
-        let category_more = shift_left(add_category_button, mini);
+        let category_overflow = total_tab_width.saturating_sub(px(2)) > width - px(22);
         let category_right = shift_left(category_more, mini);
         let category_left = shift_left(category_right, mini);
         let available_right = if category_overflow {
             category_left.left - px(8)
         } else {
-            add_category_button.left - px(8)
+            width - px(8)
         };
         let mut categories = Vec::new();
         let mut left = px(14);
@@ -331,12 +328,6 @@ impl Layout {
                         right: control_right,
                         bottom: top + px(43),
                     },
-                    SettingControl::Centered => Rect {
-                        left: control_right - px(20),
-                        top: top + px(17),
-                        right: control_right,
-                        bottom: top + px(37),
-                    },
                     _ => Rect {
                         left: control_right - px(40),
                         top: top + px(17),
@@ -427,7 +418,6 @@ impl Layout {
             add_button,
             settings_button,
             close_button,
-            add_category_button,
             category_left,
             category_right,
             category_more,
@@ -467,9 +457,8 @@ impl Layout {
         }
         let mut buttons = vec![
             (self.search_button, ToolButton::Search),
-            (self.add_button, ToolButton::AddItem),
+            (self.add_button, ToolButton::AddMenu),
             (self.settings_button, ToolButton::Settings),
-            (self.add_category_button, ToolButton::AddCategory),
         ];
         if self.category_overflow {
             buttons.extend([
@@ -553,6 +542,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reclaimed_category_space_and_top_menu_hit_at_all_dpis() {
+        // Eleven 72px tabs now fit (previously the extra plus forced overflow).
+        let names = vec!["常用".to_owned(); 11];
+        for dpi in [96, 120, 144, 192] {
+            let px = |n: i32| (n as f32 * dpi as f32 / 96.0).round() as i32;
+            let layout = Layout::calculate(LayoutInput {
+                width: px(840),
+                height: px(520),
+                dpi,
+                view: View::Launcher,
+                category_names: &names,
+                category_start: 0,
+                search_mode: false,
+                item_count: 0,
+            });
+            assert!(!layout.category_overflow);
+            assert_eq!(layout.categories.len(), 11);
+            assert_eq!(layout.tool_at(px(815), px(67), View::Launcher), None);
+            assert_eq!(layout.category_at(px(815), px(67)), Some(10));
+            assert_eq!(
+                layout.tool_at(px(735), px(23), View::Launcher),
+                Some(ToolButton::AddMenu)
+            );
+        }
+    }
+
+    #[test]
     fn dynamic_tabs_overflow_without_disappearing_controls() {
         let names = (0..20)
             .map(|index| format!("分类 {index}"))
@@ -569,10 +585,10 @@ mod tests {
         });
         assert!(layout.categories.len() < names.len());
         assert!(layout.category_overflow);
-        assert!(layout.category_more.right <= layout.add_category_button.left);
+        assert_eq!(layout.category_more.right, 832);
         assert_eq!(
             layout.tool_at(815, 67, View::Launcher),
-            Some(ToolButton::AddCategory)
+            Some(ToolButton::CategoryMore)
         );
     }
 

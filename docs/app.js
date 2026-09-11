@@ -1,6 +1,12 @@
 'use strict';
 (() => {
   const $ = selector => document.querySelector(selector);
+  // Shared eight-tooth polar geometry with native render::gear_points.
+  const gearPoints = Array.from({length: 8}, (_, tooth) =>
+    [[-22.5, 7], [-13, 7], [-10, 9], [10, 9], [13, 7]].map(([offset, radius]) => {
+      const angle = (tooth * 45 + offset - 90) * Math.PI / 180;
+      return `${12 + radius * Math.cos(angle)},${12 + radius * Math.sin(angle)}`;
+    })).flat().join(' ');
   const paths = {
     search: '<circle cx="11" cy="11" r="7"/><path d="m17 17 6 6"/>',
     plus: '<path d="M5 12h14M12 5v14"/>',
@@ -8,7 +14,7 @@
     back: '<path d="m15 5-7 7 7 7"/>',
     right: '<path d="m9 5 7 7-7 7"/>',
     more: '<g fill="currentColor" stroke="none"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></g>',
-    settings: '<circle cx="12" cy="12" r="7"/><circle cx="12" cy="12" r="2" fill="currentColor"/><path d="M3 12h4m10 0h4M12 3v4m0 10v4"/>'
+    settings: `<polygon points="${gearPoints}" stroke-linejoin="round"/><circle cx="12" cy="12" r="3"/>`
   };
   document.querySelectorAll('[data-icon]').forEach(button => {
     button.type = 'button';
@@ -97,6 +103,7 @@
   }
 
   function setMenu(open) {
+    if (open) setAddMenu(false);
     $('#category-menu').hidden = !open;
     $('#category-more').setAttribute('aria-expanded', String(open));
   }
@@ -105,6 +112,7 @@
     selected = null;
     search.value = '';
     setMenu(false);
+    setAddMenu(false);
     renderTabs();
     renderItems();
     announce(`已切换到「${categories[index]}」。`);
@@ -112,15 +120,17 @@
   function renderTabs() {
     const width = windowElement.clientWidth;
     const tabWidth = name => Math.max(72, Math.min(156, Math.min([...name].length, 10) * 16 + 30));
-    const overflow = categories.reduce((sum, name) => sum + tabWidth(name) + 2, 0) > width - 64;
+    const overflow = categories.reduce((sum, name) => sum + tabWidth(name) + 2, 0) - 2 > width - 22;
     ['left', 'right', 'more'].forEach(name => { $(`#category-${name}`).hidden = !overflow; });
     if (!overflow) categoryStart = 0;
-    const available = width - (overflow ? 166 : 64);
+    const available = width - (overflow ? 132 : 22);
     let occupied = 0;
+    let exhausted = false;
     const tabs = $('#tabs');
     tabs.replaceChildren();
     categories.forEach((name, index) => {
-      if (index < categoryStart || occupied + tabWidth(name) > available) return;
+      if (index < categoryStart || exhausted) return;
+      if (occupied + tabWidth(name) > available) { exhausted = true; return; }
       occupied += tabWidth(name) + 2;
       const tab = document.createElement('button');
       tab.type = 'button';
@@ -178,9 +188,11 @@
   $('#category-right').addEventListener('click', () => { categoryStart = Math.min(categories.length - 1, categoryStart + 1); renderTabs(); });
   document.addEventListener('pointerdown', event => {
     if (!event.target.closest('#category-menu, #category-more')) setMenu(false);
+    if (!event.target.closest('#add-menu, #add-button')) setAddMenu(false);
   });
 
   function setSearch(open) {
+    setAddMenu(false);
     $('#search-bar').hidden = !open;
     $('#search-button').setAttribute('aria-expanded', String(open));
     $('#launcher-view').classList.toggle('searching', open);
@@ -199,6 +211,7 @@
     settingsOpen = open;
     cancelCapture();
     setMenu(false);
+    setAddMenu(false);
     $('#settings-view').hidden = !open;
     $('#launcher-view').hidden = open;
     $('#back-button').hidden = !open;
@@ -248,6 +261,7 @@
     dialog.hidden = false;
     $('#app-shell').inert = true;
     setMenu(false);
+    setAddMenu(false);
     (name === 'category' ? $('#category-name') : $('#add-file')).focus();
   }
   function closeDialog() {
@@ -258,8 +272,27 @@
     $('#app-shell').inert = false;
     returnFocus?.focus();
   }
-  $('#add-button').addEventListener('click', () => openDialog('add', $('#add-button')));
-  $('#category-add').addEventListener('click', () => { $('#category-name').value = ''; openDialog('category', $('#category-add')); });
+  function setAddMenu(open) {
+    $('#add-menu').hidden = !open;
+    $('#add-button').setAttribute('aria-expanded', String(open));
+    if (open) { setMenu(false); $('#add-menu-item').focus(); }
+  }
+  $('#add-button').addEventListener('click', () => setAddMenu($('#add-menu').hidden));
+  $('#add-button').addEventListener('keydown', event => {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault(); setAddMenu(true);
+      if (event.key === 'ArrowUp') $('#add-menu-category').focus();
+    }
+  });
+  $('#add-menu').addEventListener('keydown', event => {
+    const buttons = [...$('#add-menu').children];
+    const index = buttons.indexOf(document.activeElement);
+    const next = {ArrowDown: (index + 1) % 2, ArrowUp: (index + 1) % 2, Home: 0, End: 1}[event.key];
+    if (next !== undefined) { event.preventDefault(); buttons[next].focus(); }
+    if (event.key === 'Tab') { setAddMenu(false); $('#add-button').focus(); }
+  });
+  $('#add-menu-item').addEventListener('click', () => openDialog('add', $('#add-button')));
+  $('#add-menu-category').addEventListener('click', () => { $('#category-name').value = ''; openDialog('category', $('#add-button')); });
   $('#add-close').addEventListener('click', closeDialog);
   $('#category-cancel').addEventListener('click', closeDialog);
   $('#overlay').addEventListener('click', event => { if (event.target === $('#overlay')) closeDialog(); });
@@ -302,6 +335,7 @@
       setSearch(false);
       selected = null;
       setMenu(false);
+      setAddMenu(false);
       $('#restore-button').focus();
       announce('演示窗口已关闭，可重新打开。');
     } else {
@@ -315,6 +349,7 @@
     if (event.key === 'Escape') {
       event.preventDefault();
       if (dialog) closeDialog();
+      else if (!$('#add-menu').hidden) { setAddMenu(false); $('#add-button').focus(); }
       else if (!$('#category-menu').hidden) { setMenu(false); $('#category-more').focus(); }
       else if (settingsOpen) setSettings(false);
       else if (!$('#search-bar').hidden) { setSearch(false); $('#search-button').focus(); }
