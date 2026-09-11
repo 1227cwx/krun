@@ -50,8 +50,6 @@
   const windowElement = $('.app-window');
   const grid = $('#demo-grid');
   const search = $('#demo-search');
-  const announce = message => { $('#demo-status').textContent = message; };
-  const launch = item => announce(`已模拟运行「${item.name}」。`);
 
   function renderItems() {
     const query = search.value.trim().toLocaleLowerCase();
@@ -74,16 +72,14 @@
       const label = document.createElement('span');
       label.textContent = item.name;
       tile.append(image, label);
-      tile.addEventListener('click', event => {
+      tile.addEventListener('click', () => {
         selected = item.id;
         [...grid.children].forEach(button => {
           button.setAttribute('aria-pressed', String(button === tile));
           button.classList.remove('keyboard-selected');
         });
         // Native mouse selection has no persistent background after pointer exit.
-        if (!$('#double-click').checked || event.detail === 0) launch(item);
       });
-      tile.addEventListener('dblclick', () => { if ($('#double-click').checked) launch(item); });
       tile.addEventListener('keydown', event => {
         const columns = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
         const offset = {ArrowLeft: -1, ArrowRight: 1, ArrowUp: -columns, ArrowDown: columns}[event.key];
@@ -115,7 +111,6 @@
     setAddMenu(false);
     renderTabs();
     renderItems();
-    announce(`已切换到「${categories[index]}」。`);
   }
   function renderTabs() {
     const width = windowElement.clientWidth;
@@ -237,7 +232,6 @@
     if (!(event.ctrlKey || event.altKey || event.metaKey)) return;
     hotkey = [event.ctrlKey && 'Ctrl', event.altKey && 'Alt', event.shiftKey && 'Shift', event.metaKey && 'Win', event.key.toUpperCase()].filter(Boolean).join(' + ');
     cancelCapture();
-    announce(`演示快捷键已设为 ${hotkey}。`);
   });
   $('#centered').addEventListener('change', () => {
     $('#movable').disabled = $('#centered').checked;
@@ -249,10 +243,6 @@
   });
   $('#movable').addEventListener('change', () => $('.titlebar').classList.toggle('movable', $('#movable').checked));
   $('#resizable').addEventListener('change', () => { $('#resize-handle').hidden = !$('#resizable').checked; });
-  $('#settings-view').addEventListener('change', event => {
-    const label = event.target.closest('label');
-    if (label) announce(`${label.querySelector('span').firstChild.textContent}已${event.target.checked ? '开启' : '关闭'}（演示）。`);
-  });
 
   function openDialog(name, trigger) {
     returnFocus = trigger;
@@ -312,7 +302,6 @@
     closeDialog();
     setSearch(false);
     renderItems();
-    announce(`已添加「${name}」（演示）。`);
   }
   $('#add-file').addEventListener('click', () => addDemoItem(false));
   $('#add-folder').addEventListener('click', () => addDemoItem(true));
@@ -337,10 +326,8 @@
       setMenu(false);
       setAddMenu(false);
       $('#restore-button').focus();
-      announce('演示窗口已关闭，可重新打开。');
     } else {
       setSettings(false);
-      announce('单击选择，双击体验运行。');
     }
   }
   $('#close-button').addEventListener('click', () => setClosed(true));

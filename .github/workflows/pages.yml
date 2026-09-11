@@ -31,7 +31,7 @@ jobs:
           PAGE_URL: ${{ steps.deployment.outputs.page_url }}
         run: |
           for attempt in $(seq 1 12); do
-            if curl --fail --silent --show-error "$PAGE_URL" -o /tmp/krun-live.html && grep -q '少一点寻找' /tmp/krun-live.html; then
+            if curl --fail --silent --show-error "$PAGE_URL" -o /tmp/krun-live.html && grep -q 'KRun，让常用触手可及。' /tmp/krun-live.html; then
               curl --fail --silent --show-error "${PAGE_URL}images/krun-launcher.png" -o /tmp/krun-live.png
               cmp docs/images/krun-launcher.png /tmp/krun-live.png
               exit 0
