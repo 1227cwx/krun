@@ -187,18 +187,23 @@ pub fn load(path: &Path) -> Result<Config, String> {
     Ok(config)
 }
 
-pub fn save(path: &Path, config: &Config) -> Result<(), String> {
+/// Serialises a configuration into the on-disk JSON representation.
+pub fn encode(config: &Config) -> Result<Vec<u8>, String> {
+    serde_json::to_vec_pretty(config).map_err(|error| format!("序列化配置失败：{error}"))
+}
+
+/// Writes pre-serialised bytes next to the executable, replacing the previous
+/// file atomically so a crash can never leave a half-written configuration.
+pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let parent = path
         .parent()
         .ok_or_else(|| "配置文件路径没有父目录".to_string())?;
     fs::create_dir_all(parent).map_err(|error| format!("创建配置目录失败：{error}"))?;
 
-    let bytes =
-        serde_json::to_vec_pretty(config).map_err(|error| format!("序列化配置失败：{error}"))?;
     let temporary = parent.join(format!("{CONFIG_FILE_NAME}.tmp"));
     let mut file =
         fs::File::create(&temporary).map_err(|error| format!("创建临时配置失败：{error}"))?;
-    file.write_all(&bytes)
+    file.write_all(bytes)
         .and_then(|_| file.sync_all())
         .map_err(|error| format!("写入临时配置失败：{error}"))?;
     drop(file);
@@ -279,5 +284,93 @@ mod tests {
         let json = serde_json::to_string(&config).unwrap();
         let restored: Config = serde_json::from_str(&json).unwrap();
         assert_eq!(restored, config);
+    }
+
+    #[test]
+    fn encoded_bytes_are_replaced_atomically() {
+        let directory = std::env::temp_dir().join(format!(
+            "krun-config-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let path = directory.join(CONFIG_FILE_NAME);
+
+        let mut config = Config::default();
+        config.categories.push(Category::new("tools", "工具"));
+        let bytes = encode(&config).unwrap();
+        write_atomic(&path, &bytes).unwrap();
+        assert_eq!(fs::read(&path).unwrap(), bytes);
+
+        // A second write replaces the first one instead of appending to it.
+        config.categories[0].items.push(LaunchItem {
+            id: "one".into(),
+            name: "项目".into(),
+            path: "%WINDIR%\\explorer.exe".into(),
+            ..LaunchItem::default()
+        });
+        let updated = encode(&config).unwrap();
+        write_atomic(&path, &updated).unwrap();
+        assert_eq!(load(&path).unwrap(), config);
+
+        let leftovers = fs::read_dir(&directory).unwrap().count();
+        assert_eq!(leftovers, 1, "the temporary file should be gone");
+        fs::remove_dir_all(&directory).ok();
+    }
+
+    fn generated_config(categories: usize, items: usize) -> Config {
+        let mut config = Config::default();
+        config.categories = (0..categories)
+            .map(|category| {
+                let mut value =
+                    Category::new(format!("category-{category}"), format!("分类 {category}"));
+                value.items = (0..items)
+                    .map(|item| LaunchItem {
+                        id: format!("item-{category}-{item}"),
+                        name: format!("示例项目 {item}"),
+                        path: format!("%WINDIR%\\System32\\example-{category}-{item}.exe"),
+                        ..LaunchItem::default()
+                    })
+                    .collect();
+                value
+            })
+            .collect();
+        config.active_category = config.categories[0].id.clone();
+        config
+    }
+
+    /// Measures load/encode/write for realistically large configurations.
+    /// Run explicitly with:
+    /// `cargo test --release perf -- --ignored --nocapture`
+    #[test]
+    #[ignore = "timing harness, not an assertion"]
+    fn perf_config_sizes() {
+        let directory = std::env::temp_dir().join("krun-config-perf");
+        fs::create_dir_all(&directory).unwrap();
+        for (categories, items) in [(1usize, 1_000usize), (1, 10_000), (1, 50_000)] {
+            let config = generated_config(categories, items);
+            let total = categories * items;
+            let started = std::time::Instant::now();
+            let bytes = encode(&config).unwrap();
+            let encoded = started.elapsed();
+            let path = directory.join("launcher.json");
+            let started = std::time::Instant::now();
+            write_atomic(&path, &bytes).unwrap();
+            let written = started.elapsed();
+            let started = std::time::Instant::now();
+            let restored = load(&path).unwrap();
+            let loaded = started.elapsed();
+            assert_eq!(restored, config);
+            println!(
+                "{total:>6} 项 / {:>7} 字节：encode {:>8.2?}  写入 {:>8.2?}  读取 {:>8.2?}",
+                bytes.len(),
+                encoded,
+                written,
+                loaded
+            );
+        }
+        fs::remove_dir_all(&directory).ok();
     }
 }

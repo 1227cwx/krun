@@ -3,8 +3,10 @@
 mod app;
 mod brand;
 mod config;
+mod config_writer;
 mod hotkey;
 mod icon_loader;
+mod item_view;
 mod layout;
 mod render;
 mod search;
@@ -49,8 +51,8 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{
     WM_CLOSE, WM_COMMAND, WM_CREATE, WM_DESTROY, WM_DISPLAYCHANGE, WM_DPICHANGED, WM_DROPFILES,
     WM_EXITSIZEMOVE, WM_GETMINMAXINFO, WM_HOTKEY, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
     WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCCALCSIZE, WM_NCCREATE, WM_NCHITTEST, WM_PAINT,
-    WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW, WS_EX_ACCEPTFILES,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
+    WM_QUERYENDSESSION, WM_RBUTTONDOWN, WM_SIZE, WM_SYSKEYDOWN, WM_TIMER, WNDCLASSEXW,
+    WS_EX_ACCEPTFILES, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP, WS_THICKFRAME,
 };
 
 const WINDOW_CLASS: &str = "QuickLaunchNativeWindow";
@@ -324,6 +326,14 @@ unsafe extern "system" fn window_proc(
             app.content_animation_tick();
             0
         }
+        WM_TIMER if wparam == app::SAVE_TIMER_ID => {
+            app.save_timer_tick();
+            0
+        }
+        crate::config_writer::SAVE_ERROR_MESSAGE => {
+            app.report_save_error();
+            0
+        }
         WM_SIZE => {
             app.relayout();
             0
@@ -357,6 +367,13 @@ unsafe extern "system" fn window_proc(
             app.tray_event(tray::event_from_lparam(lparam));
             0
         }
+        WM_QUERYENDSESSION => {
+            // Windows may terminate the process after logoff/shutdown without
+            // delivering WM_DESTROY, so persist while the session still exists.
+            app.store_window_placement();
+            app.save_for_session_end();
+            1
+        }
         WM_CLOSE => {
             if app.exiting {
                 unsafe { DestroyWindow(hwnd) };
@@ -367,6 +384,7 @@ unsafe extern "system" fn window_proc(
         }
         WM_DESTROY => {
             app.unregister_hotkey();
+            app.flush_save();
             unsafe {
                 SetWindowLongPtrW(hwnd, -21, 0);
                 PostQuitMessage(0);

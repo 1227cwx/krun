@@ -1,5 +1,7 @@
-use crate::config::{self, Config, HotkeyConfig};
+use crate::config::{Config, HotkeyConfig, LaunchItem};
+use crate::config_writer::ConfigWriter;
 use crate::icon_loader::{IconKey, IconLoader};
+use crate::item_view::Scope;
 use crate::layout::{Layout, LayoutInput, SettingControl, ToolButton, View};
 use crate::text_input::TextInput;
 use crate::{hotkey, render, search, shell, startup, tray, win};
@@ -46,8 +48,11 @@ pub const PRIMARY_HOTKEY_ID: i32 = 1;
 const SECONDARY_HOTKEY_ID: i32 = 2;
 pub const FADE_TIMER_ID: usize = 9;
 pub const CONTENT_TIMER_ID: usize = 10;
+pub const SAVE_TIMER_ID: usize = 11;
 const FADE_DURATION: Duration = Duration::from_millis(110);
 const CONTENT_DURATION: Duration = Duration::from_millis(130);
+/// Writes are coalesced for this long so a burst of edits produces one file.
+const SAVE_DEBOUNCE_MS: u32 = 350;
 
 #[derive(Clone, Copy)]
 struct Fade {
@@ -101,7 +106,13 @@ pub struct App {
     accent: windows_sys::Win32::Foundation::COLORREF,
     content_started: Option<Instant>,
     icon_loader: Option<IconLoader>,
-    icons: HashMap<IconKey, HICON>,
+    /// Icons keyed by physical pixel size and expanded filesystem path.
+    icons: HashMap<i32, HashMap<String, HICON>>,
+    /// Expanded paths keyed by the raw value from launcher.json. This cache is
+    /// populated on first use so repeated frames perform no string expansion.
+    expanded_paths: HashMap<String, String>,
+    writer: Option<ConfigWriter>,
+    save_pending: bool,
 }
 
 impl App {
@@ -155,12 +166,16 @@ impl App {
             content_started: None,
             icon_loader: None,
             icons: HashMap::new(),
+            expanded_paths: HashMap::new(),
+            writer: None,
+            save_pending: false,
         }
     }
 
     pub fn attach(&mut self, hwnd: HWND) -> Result<(), String> {
         self.hwnd = hwnd;
         self.icon_loader = Some(IconLoader::new(hwnd));
+        self.writer = Some(ConfigWriter::new(hwnd));
         self.dpi = unsafe { GetDpiForWindow(hwnd) }.max(96);
         self.text_input = Some(TextInput::create(hwnd, self.dpi)?);
         self.startup_enabled = std::env::current_exe()
@@ -172,6 +187,9 @@ impl App {
         )?);
         self.apply_resize_style();
         self.relayout();
+        // Warm the first page while the window is still hidden so showing the
+        // launcher never has to wait for shell icon lookups.
+        self.preload_visible_icons();
         Ok(())
     }
 
@@ -179,7 +197,7 @@ impl App {
         let mut client = RECT::default();
         unsafe { GetClientRect(self.hwnd, &mut client) };
         let names = category_names(&self.config);
-        let item_count = self.visible_refs().len();
+        let item_count = self.visible_count();
         self.layout = Layout::calculate(LayoutInput {
             width: client.right - client.left,
             height: client.bottom - client.top,
@@ -360,24 +378,45 @@ impl App {
     }
 
     pub fn paint(&mut self) {
-        let refs = self.visible_refs();
-        let end = (self.page_offset + self.layout.visible_capacity).min(refs.len());
-        let page = if self.page_offset < end {
-            &refs[self.page_offset..end]
-        } else {
-            &[]
-        };
+        let count = self.visible_count();
+        let end = self
+            .page_offset
+            .saturating_add(self.layout.visible_capacity)
+            .min(count);
+        // Only the references for the page actually on screen are materialised.
+        let mut page = Vec::new();
+        self.scope().write_page(
+            &self.config,
+            self.page_offset,
+            end.saturating_sub(self.page_offset),
+            &mut page,
+        );
         let icon_size = ((32i64 * self.dpi as i64) / 96).clamp(32, 80) as i32;
-        let mut visible = Vec::with_capacity(page.len());
-        for reference in page {
-            let item = self.config.categories[reference.category].items[reference.item].clone();
-            let icon = self.icon_for(&item.path, icon_size);
-            visible.push((item, icon));
+        let mut icons = Vec::with_capacity(page.len());
+        let (config, icon_cache, expanded_paths, icon_loader) = (
+            &self.config,
+            &self.icons,
+            &mut self.expanded_paths,
+            &mut self.icon_loader,
+        );
+        for reference in &page {
+            let Some(item) = config
+                .categories
+                .get(reference.category)
+                .and_then(|category| category.items.get(reference.item))
+            else {
+                icons.push(null_mut());
+                continue;
+            };
+            icons.push(icon_for_path(
+                &item.path,
+                icon_size,
+                icon_cache,
+                expanded_paths,
+                icon_loader.as_mut(),
+            ));
         }
-        let borrowed = visible
-            .iter()
-            .map(|(item, icon)| (item, *icon))
-            .collect::<Vec<_>>();
+        let borrowed = self.borrowed_items(&page, &icons);
         let data = render::RenderData {
             config: &self.config,
             layout: &self.layout,
@@ -390,7 +429,7 @@ impl App {
             startup_enabled: self.startup_enabled,
             hotkey_capture: self.hotkey_capture,
             page_offset: self.page_offset,
-            item_count: self.visible_refs().len(),
+            item_count: count,
             scrollbar_hover: self.scrollbar_hover,
             scrollbar_active: self.dragging_scrollbar,
             hovered_item: self.hovered_item,
@@ -403,6 +442,42 @@ impl App {
             hwnd: self.hwnd,
         };
         unsafe { render::paint(self.hwnd, &data) };
+    }
+
+    fn borrowed_items<'a>(
+        &'a self,
+        page: &[search::ItemRef],
+        icons: &'a [HICON],
+    ) -> Vec<(&'a LaunchItem, HICON)> {
+        page.iter()
+            .zip(icons.iter())
+            .filter_map(|(reference, icon)| {
+                self.item_at(reference.category, reference.item)
+                    .map(|item| (item, *icon))
+            })
+            .collect()
+    }
+
+    /// Asks the background loader for any icon that is not cached yet.
+    fn request_icons(&mut self, requested: &mut Vec<(usize, usize)>, size: i32) {
+        if requested.is_empty() {
+            return;
+        }
+        let keys = requested
+            .drain(..)
+            .filter_map(|(category, item)| {
+                self.item_at(category, item).map(|item| IconKey {
+                    path: shell::expand_environment(&item.path),
+                    size,
+                })
+            })
+            .collect::<Vec<_>>();
+        let Some(loader) = &mut self.icon_loader else {
+            return;
+        };
+        for key in keys {
+            loader.request(key);
+        }
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32) {
@@ -422,7 +497,7 @@ impl App {
         if self.view != View::Launcher || !self.layout.scrollbar_visible {
             return false;
         }
-        let item_count = self.visible_refs().len();
+        let item_count = self.visible_count();
         let Some(thumb) = self.layout.scrollbar_thumb(self.page_offset, item_count) else {
             return false;
         };
@@ -451,9 +526,7 @@ impl App {
         if !self.dragging_scrollbar {
             return;
         }
-        self.page_offset = self
-            .layout
-            .scrollbar_offset_at(y, self.visible_refs().len());
+        self.page_offset = self.layout.scrollbar_offset_at(y, self.visible_count());
         self.clamp_page();
         self.redraw();
     }
@@ -464,7 +537,7 @@ impl App {
         }
         let local = self.layout.item_at(x, y)?;
         let global = self.page_offset + local;
-        (global < self.visible_refs().len()).then_some(global)
+        (global < self.visible_count()).then_some(global)
     }
 
     pub fn left_click(&mut self, x: i32, y: i32) {
@@ -506,7 +579,7 @@ impl App {
         }
         if let Some(local) = self.layout.item_at(x, y) {
             let global = self.page_offset + local;
-            if global < self.visible_refs().len() {
+            if global < self.visible_count() {
                 self.selected = Some(global);
                 self.keyboard_selection = false;
                 self.redraw();
@@ -531,7 +604,7 @@ impl App {
             return;
         };
         let global = self.page_offset + local;
-        if global < self.visible_refs().len() {
+        if global < self.visible_count() {
             self.selected = Some(global);
             self.keyboard_selection = false;
             self.redraw();
@@ -550,7 +623,7 @@ impl App {
         {
             self.layout.item_at(x, y).and_then(|local| {
                 let global = self.page_offset + local;
-                (global < self.visible_refs().len()).then_some(global)
+                (global < self.visible_count()).then_some(global)
             })
         } else {
             None
@@ -591,7 +664,7 @@ impl App {
         }
         if let Some(local) = self.layout.item_at(x, y) {
             let global = self.page_offset + local;
-            if global < self.visible_refs().len() {
+            if global < self.visible_count() {
                 self.selected = Some(global);
                 self.keyboard_selection = false;
                 self.show_item_menu(global);
@@ -806,7 +879,7 @@ impl App {
         if self.view != View::Launcher {
             return;
         }
-        let count = self.visible_refs().len();
+        let count = self.visible_count();
         if count == 0 {
             self.selected = None;
             return;
@@ -824,11 +897,12 @@ impl App {
     }
 
     pub fn run_selected(&mut self) {
-        let refs = self.visible_refs();
-        let Some(reference) = self.selected.and_then(|index| refs.get(index).copied()) else {
+        let Some(reference) = self.selected.and_then(|index| self.visible_ref(index)) else {
             return;
         };
-        let item = self.config.categories[reference.category].items[reference.item].clone();
+        let Some(item) = self.item_at(reference.category, reference.item).cloned() else {
+            return;
+        };
         match shell::launch(self.hwnd, &item) {
             Ok(()) => self.hide(),
             Err(error) => self.error(&error),
@@ -836,8 +910,8 @@ impl App {
     }
 
     pub fn delete_selected(&mut self) {
-        let refs = self.visible_refs();
-        let Some(reference) = self.selected.and_then(|index| refs.get(index).copied()) else {
+        let reference = self.selected.and_then(|index| self.visible_ref(index));
+        let Some(reference) = reference else {
             return;
         };
         self.config.categories[reference.category]
@@ -924,7 +998,7 @@ impl App {
 
     pub fn prepare_exit(&mut self) {
         self.store_window_placement();
-        self.save();
+        self.flush_save();
         self.tray.take();
         self.exiting = true;
     }
@@ -1212,6 +1286,7 @@ impl App {
         self.config.active_category = self.config.categories[category].id.clone();
         self.save();
         self.relayout();
+        self.preload_visible_icons();
         self.start_content_transition();
     }
 
@@ -1255,7 +1330,7 @@ impl App {
             Vec::new()
         };
         self.page_offset = 0;
-        self.selected = (!self.visible_refs().is_empty()).then_some(0);
+        self.selected = (self.visible_count() > 0).then_some(0);
         self.hovered_item = None;
         self.pressed_item = None;
         self.keyboard_selection = false;
@@ -1263,26 +1338,30 @@ impl App {
         self.redraw();
     }
 
-    fn visible_refs(&self) -> Vec<search::ItemRef> {
-        if self.search_mode {
-            if self.query.trim().is_empty() {
-                self.config
-                    .categories
-                    .iter()
-                    .enumerate()
-                    .flat_map(|(category, value)| {
-                        (0..value.items.len()).map(move |item| search::ItemRef { category, item })
-                    })
-                    .collect()
-            } else {
-                self.search_results.clone()
-            }
-        } else {
-            let category = self.config.active_category_index();
-            (0..self.config.categories[category].items.len())
-                .map(|item| search::ItemRef { category, item })
-                .collect()
-        }
+    /// References currently shown, resolved lazily so looking up a single index
+    /// or the total count never allocates a vector as large as the category.
+    fn scope(&self) -> Scope<'_> {
+        Scope::new(
+            &self.config,
+            self.search_mode,
+            &self.query,
+            &self.search_results,
+        )
+    }
+
+    fn visible_count(&self) -> usize {
+        self.scope().len(&self.config)
+    }
+
+    fn visible_ref(&self, index: usize) -> Option<search::ItemRef> {
+        self.scope().get(&self.config, index)
+    }
+
+    fn item_at(&self, category: usize, item: usize) -> Option<&LaunchItem> {
+        self.config
+            .categories
+            .get(category)
+            .and_then(|category| category.items.get(item))
     }
 
     fn clamp_page(&mut self) {
@@ -1308,33 +1387,52 @@ impl App {
         }
     }
 
-    fn icon_for(&mut self, path: &str, size: i32) -> HICON {
-        let key = IconKey {
-            path: shell::expand_environment(path),
-            size,
-        };
-        if let Some(icon) = self.icons.get(&key) {
-            return *icon;
-        }
-        if let Some(loader) = &mut self.icon_loader {
-            loader.request(key);
-        }
-        null_mut()
-    }
-
     pub fn icons_ready(&mut self) {
         let Some(loader) = &mut self.icon_loader else {
             return;
         };
         for item in loader.drain() {
             let (key, icon) = item.into_parts();
-            if let Some(previous) = self.icons.insert(key, icon)
+            let replaced = self
+                .icons
+                .entry(key.size)
+                .or_default()
+                .insert(key.path.clone(), icon);
+            if let Some(previous) = replaced
                 && !previous.is_null()
             {
                 unsafe { DestroyIcon(previous) };
             }
         }
         self.redraw();
+    }
+
+    /// Warms the first page of the active category so the very first show has
+    /// its icons already in the cache.
+    fn preload_visible_icons(&mut self) {
+        let icon_size = ((32i64 * self.dpi as i64) / 96).clamp(32, 80) as i32;
+        let mut page = Vec::new();
+        self.scope()
+            .write_page(&self.config, 0, self.layout.visible_capacity, &mut page);
+        let mut missing: Vec<(usize, usize)> = Vec::new();
+        for reference in &page {
+            let Some(item) = self.item_at(reference.category, reference.item) else {
+                continue;
+            };
+            let expanded = self
+                .expanded_paths
+                .get(&item.path)
+                .map(String::as_str)
+                .unwrap_or(&item.path);
+            let cached = self
+                .icons
+                .get(&icon_size)
+                .is_some_and(|cache| cache.contains_key(expanded));
+            if !cached {
+                missing.push((reference.category, reference.item));
+            }
+        }
+        self.request_icons(&mut missing, icon_size);
     }
 
     fn show_all_categories_menu(&mut self) {
@@ -1357,8 +1455,7 @@ impl App {
     }
 
     fn show_item_menu(&mut self, visible_index: usize) {
-        let refs = self.visible_refs();
-        let Some(reference) = refs.get(visible_index).copied() else {
+        let Some(reference) = self.visible_ref(visible_index) else {
             return;
         };
         let menu = unsafe { CreatePopupMenu() };
@@ -1513,11 +1610,73 @@ impl App {
         self.redraw();
     }
 
-    fn save(&self) {
-        if self.persistence_enabled
-            && let Err(error) = config::save(&self.config_path, &self.config)
-        {
-            self.error(&error);
+    /// Queues the current configuration to be written shortly. Bursts of edits
+    /// collapse into one write, and the window is never blocked on disk I/O.
+    fn save(&mut self) {
+        if !self.persistence_enabled || self.writer.is_none() {
+            return;
+        }
+        self.save_pending = true;
+        unsafe { SetTimer(self.hwnd, SAVE_TIMER_ID, SAVE_DEBOUNCE_MS, None) };
+    }
+
+    /// Hands the current configuration to the worker without waiting for it.
+    /// Only the clone happens on this thread; JSON encoding and the file write
+    /// stay on the worker.
+    fn enqueue_save(&mut self) {
+        if !self.persistence_enabled {
+            return;
+        }
+        let Some(writer) = self.writer.as_mut() else {
+            return;
+        };
+        let config = self.config.clone();
+        writer.write(self.config_path.clone(), config);
+        self.save_pending = false;
+    }
+
+    /// Called when the debounce timer elapses. The worker thread stays alive so
+    /// later edits keep being written.
+    pub fn save_timer_tick(&mut self) {
+        // SetTimer arms a repeating timer; drop it and re-arm on the next edit.
+        unsafe { KillTimer(self.hwnd, SAVE_TIMER_ID) };
+        if self.save_pending {
+            self.enqueue_save();
+        }
+    }
+
+    /// Persists synchronously without stopping the writer. Windows can cancel a
+    /// session shutdown after WM_QUERYENDSESSION, so later saves must still work.
+    pub fn save_for_session_end(&mut self) {
+        unsafe { KillTimer(self.hwnd, SAVE_TIMER_ID) };
+        if !self.persistence_enabled {
+            return;
+        }
+        let config = self.config.clone();
+        if let Some(writer) = &self.writer {
+            writer.write_and_wait(self.config_path.clone(), config);
+        }
+        self.save_pending = false;
+        self.report_save_error();
+    }
+
+    /// Writes any pending change and drains the queue. Used only on the way out,
+    /// because it stops the writer for good.
+    pub fn flush_save(&mut self) {
+        unsafe { KillTimer(self.hwnd, SAVE_TIMER_ID) };
+        if self.save_pending {
+            self.enqueue_save();
+        }
+        if let Some(writer) = self.writer.as_mut() {
+            writer.finish();
+        }
+        self.report_save_error();
+    }
+
+    pub fn report_save_error(&mut self) {
+        let message = self.writer.as_ref().and_then(ConfigWriter::take_error);
+        if let Some(message) = message {
+            self.error(&message);
         }
     }
 
@@ -1526,12 +1685,41 @@ impl App {
     }
 }
 
+/// Looks an icon up by expanded filesystem path. Expansion is cached by raw
+/// configured path, so repeated frames do no string allocation or expansion.
+fn icon_for_path(
+    path: &str,
+    size: i32,
+    icons: &HashMap<i32, HashMap<String, HICON>>,
+    expanded_paths: &mut HashMap<String, String>,
+    loader: Option<&mut IconLoader>,
+) -> HICON {
+    let expanded = expanded_paths
+        .entry(path.to_owned())
+        .or_insert_with(|| shell::expand_environment(path));
+    if let Some(icon) = icons.get(&size).and_then(|cache| cache.get(expanded)) {
+        return *icon;
+    }
+    if let Some(loader) = loader {
+        loader.request(IconKey {
+            path: expanded.clone(),
+            size,
+        });
+    }
+    null_mut()
+}
+
 impl Drop for App {
     fn drop(&mut self) {
         self.tray.take();
-        for icon in self.icons.values().copied() {
-            if !icon.is_null() {
-                unsafe { DestroyIcon(icon) };
+        if self.writer.is_some() {
+            self.flush_save();
+        }
+        for cache in self.icons.values() {
+            for icon in cache.values().copied() {
+                if !icon.is_null() {
+                    unsafe { DestroyIcon(icon) };
+                }
             }
         }
     }
@@ -1672,5 +1860,80 @@ mod tests {
     fn single_click_only_launches_when_double_click_is_disabled() {
         assert!(!should_launch_on_single_click(true));
         assert!(should_launch_on_single_click(false));
+    }
+
+    #[test]
+    fn visible_scope_tracks_category_selection_and_search() {
+        let mut config = Config::default();
+        config.categories[0].items = (0..40)
+            .map(|item| LaunchItem {
+                name: format!("项目{item}"),
+                ..LaunchItem::default()
+            })
+            .collect();
+        config
+            .categories
+            .push(crate::config::Category::new("tools", "工具"));
+        config.categories[1].items = (0..5)
+            .map(|item| LaunchItem {
+                name: format!("工具{item}"),
+                ..LaunchItem::default()
+            })
+            .collect();
+
+        let mut app = App::new(config, std::path::PathBuf::new(), false);
+        assert_eq!(app.visible_count(), 40);
+        assert_eq!(
+            app.visible_ref(39),
+            Some(search::ItemRef {
+                category: 0,
+                item: 39
+            })
+        );
+        assert_eq!(app.visible_ref(40), None);
+
+        app.config.active_category = "tools".into();
+        assert_eq!(app.visible_count(), 5);
+
+        // An empty query searches every category, not just the active one.
+        app.search_mode = true;
+        assert_eq!(app.visible_count(), 45);
+        assert_eq!(
+            app.visible_ref(40),
+            Some(search::ItemRef {
+                category: 1,
+                item: 0
+            })
+        );
+
+        // A real query uses the pre-computed result list.
+        app.query = "工具".into();
+        app.search_results = search::results(&app.config, &app.query);
+        assert_eq!(app.visible_count(), app.search_results.len());
+        assert_eq!(app.visible_ref(0), app.search_results.first().copied());
+    }
+
+    #[test]
+    fn failed_icon_is_a_negative_cache_entry() {
+        let path = "%KRUN_MISSING_PATH%\\missing.exe";
+        let expanded = shell::expand_environment(path);
+        let mut icons = HashMap::new();
+        icons
+            .entry(32)
+            .or_insert_with(HashMap::new)
+            .insert(expanded, null_mut());
+        let mut expanded_paths = HashMap::new();
+
+        assert!(icon_for_path(path, 32, &icons, &mut expanded_paths, None).is_null());
+        assert_eq!(expanded_paths.len(), 1);
+    }
+
+    #[test]
+    fn page_count_saturates_when_offset_is_stale() {
+        let count = 3usize;
+        let page_offset = 50usize;
+        let capacity = 24usize;
+        let end = page_offset.saturating_add(capacity).min(count);
+        assert_eq!(end.saturating_sub(page_offset), 0);
     }
 }
