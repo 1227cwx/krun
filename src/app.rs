@@ -62,6 +62,12 @@ struct Fade {
 }
 
 #[derive(Clone, Copy)]
+enum CategorySwitch {
+    Hover,
+    Explicit,
+}
+
+#[derive(Clone, Copy)]
 pub enum InputMode {
     Search,
     NewCategory,
@@ -577,7 +583,7 @@ impl App {
             }
         }
         if let Some(category) = self.layout.category_at(x, y) {
-            self.select_category(category);
+            self.select_category(category, CategorySwitch::Explicit);
             return;
         }
         if let Some(local) = self.layout.item_at(x, y) {
@@ -626,7 +632,7 @@ impl App {
         if let Some(category) = hovered_category
             && category != self.config.active_category_index()
         {
-            self.select_category(category);
+            self.select_category(category, CategorySwitch::Hover);
             return;
         }
 
@@ -1302,7 +1308,7 @@ impl App {
         }
     }
 
-    fn select_category(&mut self, category: usize) {
+    fn select_category(&mut self, category: usize, switch: CategorySwitch) {
         self.view = View::Launcher;
         self.search_mode = false;
         self.query.clear();
@@ -1315,7 +1321,7 @@ impl App {
         }
         self.selected = None;
         self.hovered_item = None;
-        self.hovered_tool = None;
+        let previous_tool = self.hovered_tool.take();
         self.pressed_item = None;
         self.keyboard_selection = false;
         self.page_offset = 0;
@@ -1323,7 +1329,17 @@ impl App {
         self.save();
         self.relayout();
         self.preload_visible_icons();
-        self.start_content_transition();
+        match switch {
+            CategorySwitch::Hover => {
+                self.content_started = None;
+                unsafe { KillTimer(self.hwnd, CONTENT_TIMER_ID) };
+                if let Some(tool) = previous_tool {
+                    self.redraw_tool(tool);
+                }
+                self.redraw_launcher();
+            }
+            CategorySwitch::Explicit => self.start_content_transition(),
+        }
     }
 
     fn create_category(&mut self) {
@@ -1485,7 +1501,7 @@ impl App {
             let index = (command - CATEGORY_SELECT_BASE) as usize;
             if index < self.config.categories.len() {
                 self.category_start = index;
-                self.select_category(index);
+                self.select_category(index, CategorySwitch::Explicit);
             }
         }
     }
@@ -1714,6 +1730,36 @@ impl App {
         if let Some(message) = message {
             self.error(&message);
         }
+    }
+
+    fn redraw_tool(&self, tool: ToolButton) {
+        let rect = match tool {
+            ToolButton::Back => self.layout.back_button,
+            ToolButton::Search => self.layout.search_button,
+            ToolButton::AddMenu => self.layout.add_button,
+            ToolButton::Settings => self.layout.settings_button,
+            ToolButton::Close => self.layout.close_button,
+            ToolButton::CategoryLeft | ToolButton::CategoryRight | ToolButton::CategoryMore => {
+                return;
+            }
+        };
+        let rect = RECT {
+            left: rect.left,
+            top: rect.top,
+            right: rect.right,
+            bottom: rect.bottom,
+        };
+        unsafe { InvalidateRect(self.hwnd, &rect, 0) };
+    }
+
+    fn redraw_launcher(&self) {
+        let rect = RECT {
+            left: self.layout.categorybar.left,
+            top: self.layout.categorybar.top,
+            right: self.layout.client.right,
+            bottom: self.layout.client.bottom,
+        };
+        unsafe { InvalidateRect(self.hwnd, &rect, 0) };
     }
 
     fn redraw(&self) {
@@ -1969,6 +2015,21 @@ mod tests {
         assert!(app.query.is_empty());
         assert_eq!(app.selected, None);
         assert_eq!(app.hovered_tool, None);
+        assert!(app.content_started.is_none());
+    }
+
+    #[test]
+    fn explicit_category_switch_keeps_content_transition() {
+        let mut config = Config::default();
+        config
+            .categories
+            .push(crate::config::Category::new("tools", "工具"));
+        let mut app = App::new(config, std::path::PathBuf::new(), false);
+
+        app.select_category(1, CategorySwitch::Explicit);
+
+        assert_eq!(app.config.active_category, "tools");
+        assert!(app.content_started.is_some());
     }
 
     #[test]

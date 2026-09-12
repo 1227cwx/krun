@@ -103,14 +103,31 @@
     $('#category-menu').hidden = !open;
     $('#category-more').setAttribute('aria-expanded', String(open));
   }
-  function activate(index) {
+  function activate(index, animate = true, rebuildTabs = false) {
     category = index;
     selected = null;
-    setSearch(false);
+    search.value = '';
+    $('#search-bar').hidden = true;
+    $('#search-button').setAttribute('aria-expanded', 'false');
+    $('#launcher-view').classList.remove('searching');
     setMenu(false);
     setAddMenu(false);
-    renderTabs();
+    if (rebuildTabs) renderTabs();
+    else updateTabs();
+    grid.classList.toggle('instant-switch', !animate);
     renderItems();
+    if (!animate) requestAnimationFrame(() => grid.classList.remove('instant-switch'));
+  }
+  function updateTabs() {
+    [...$('#tabs').children].forEach(tab => {
+      const active = Number(tab.dataset.category) === category;
+      tab.setAttribute('aria-selected', String(active));
+      tab.tabIndex = active ? 0 : -1;
+    });
+    $('#demo-panel').setAttribute('aria-label', categories[category]);
+    [...$('#category-menu').children].forEach(button => {
+      button.setAttribute('aria-checked', String(Number(button.dataset.category) === category));
+    });
   }
   function renderTabs() {
     const width = windowElement.clientWidth;
@@ -130,6 +147,7 @@
       const tab = document.createElement('button');
       tab.type = 'button';
       tab.id = `tab-${index}`;
+      tab.dataset.category = index;
       tab.textContent = [...name].length > 10 ? [...name].slice(0, 10).join('') + '…' : name;
       tab.style.width = `${tabWidth(name)}px`;
       tab.style.flexShrink = '0';
@@ -139,14 +157,14 @@
       tab.tabIndex = index === category ? 0 : -1;
       tab.addEventListener('click', () => activate(index));
       tab.addEventListener('pointerenter', event => {
-        if (event.pointerType === 'mouse' && category !== index) activate(index);
+        if (event.pointerType === 'mouse' && category !== index) activate(index, false);
       });
       tab.addEventListener('keydown', event => {
         const next = {ArrowRight: (index + 1) % categories.length, ArrowLeft: (index + categories.length - 1) % categories.length, Home: 0, End: categories.length - 1}[event.key];
         if (next !== undefined) {
           event.preventDefault();
           categoryStart = next;
-          activate(next);
+          activate(next, true, true);
           $(`#tab-${next}`).focus();
         }
       });
@@ -160,16 +178,18 @@
     categories.forEach((name, index) => {
       const button = document.createElement('button');
       button.type = 'button';
+      button.dataset.category = index;
       button.textContent = name;
       button.setAttribute('role', 'menuitemradio');
       button.setAttribute('aria-checked', String(index === category));
       button.addEventListener('click', () => {
         categoryStart = index;
-        activate(index);
+        activate(index, true, true);
         $(`#tab-${index}`).focus();
       });
       $('#category-menu').append(button);
     });
+    updateTabs();
   }
   $('#category-more').addEventListener('click', () => {
     const open = $('#category-menu').hidden;
@@ -296,7 +316,7 @@
     categories.push(name);
     categoryStart = categories.length - 1;
     closeDialog();
-    activate(categories.length - 1);
+    activate(categories.length - 1, true, true);
     $(`#tab-${category}`).focus();
   });
   function addDemoItem(folder) {
