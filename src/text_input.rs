@@ -1,5 +1,6 @@
 use crate::layout::Rect;
 use crate::win::wide;
+use std::cell::Cell;
 use std::ptr::{null, null_mut};
 use windows_sys::Win32::Foundation::HWND;
 use windows_sys::Win32::Graphics::Gdi::{
@@ -11,20 +12,27 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::SetFocus;
 use windows_sys::Win32::UI::Shell::{DefSubclassProc, SetWindowSubclass};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     BS_DEFPUSHBUTTON, BS_PUSHBUTTON, CreateWindowExW, ES_AUTOHSCROLL, GetParent,
-    GetWindowTextLengthW, GetWindowTextW, HMENU, IDCANCEL, IDOK, SW_HIDE, SW_SHOW, SendMessageW,
-    SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_COMMAND, WM_KEYDOWN, WM_SETFONT,
-    WM_SYSKEYDOWN, WS_CHILD, WS_TABSTOP, WS_VISIBLE,
+    GetWindowTextLengthW, GetWindowTextW, HMENU, IDCANCEL, IDOK, PostMessageW, SW_HIDE, SW_SHOW,
+    SendMessageW, SetWindowPos, SetWindowTextW, ShowWindow, WINDOW_EX_STYLE, WM_APP, WM_COMMAND,
+    WM_KEYDOWN, WM_KILLFOCUS, WM_SETFOCUS, WM_SETFONT, WM_SYSKEYDOWN, WS_CHILD, WS_TABSTOP,
+    WS_VISIBLE,
 };
 
 pub const EDIT_ID: usize = 7001;
+pub const FOCUS_CHANGED_MESSAGE: u32 = WM_APP + 7;
 const SUBCLASS_ID: usize = 1;
+const EM_SETMARGINS: u32 = 0x00D3;
+const EC_LEFTMARGIN: usize = 0x0001;
+const EC_RIGHTMARGIN: usize = 0x0002;
 
 pub struct TextInput {
     pub hwnd: HWND,
     confirm: HWND,
     cancel: HWND,
-    font: HFONT,
-    search_font: HFONT,
+    font: Cell<HFONT>,
+    search_font: Cell<HFONT>,
+    dpi: Cell<u32>,
+    dialog_mode: Cell<bool>,
 }
 
 impl TextInput {
@@ -67,22 +75,26 @@ impl TextInput {
             hwnd,
             confirm,
             cancel,
-            font,
-            search_font,
+            font: Cell::new(font),
+            search_font: Cell::new(search_font),
+            dpi: Cell::new(dpi.max(96)),
+            dialog_mode: Cell::new(false),
         })
     }
 
     pub fn show(&self, rect: Rect, value: &str, buttons: Option<(Rect, Rect)>) {
         let value = wide(value);
-        let font = if buttons.is_some() {
-            self.font
+        let dialog = buttons.is_some();
+        self.dialog_mode.set(dialog);
+        let font = if dialog {
+            self.font.get()
         } else {
-            self.search_font
+            self.search_font.get()
         };
         unsafe {
             SetWindowTextW(self.hwnd, value.as_ptr());
             SendMessageW(self.hwnd, WM_SETFONT, font as usize, 1);
-            self.place(rect);
+            self.place(rect, dialog);
             ShowWindow(self.hwnd, SW_SHOW);
             SetFocus(self.hwnd);
             let length = GetWindowTextLengthW(self.hwnd) as usize;
@@ -107,22 +119,55 @@ impl TextInput {
         };
     }
 
-    pub fn set_rect(&self, rect: Rect) {
-        self.place(rect);
+    pub fn set_rect(&self, rect: Rect, dialog: bool) {
+        self.place(rect, dialog);
     }
 
-    fn place(&self, rect: Rect) {
-        let inset = 8;
+    fn place(&self, rect: Rect, dialog: bool) {
+        let geometry = input_geometry(rect, self.dpi.get(), dialog);
         unsafe {
             SetWindowPos(
                 self.hwnd,
                 null_mut(),
-                rect.left + inset,
-                rect.top + 3,
-                (rect.width() - inset * 2).max(1),
-                (rect.height() - 6).max(1),
+                geometry.rect.left,
+                geometry.rect.top,
+                geometry.rect.width(),
+                geometry.rect.height(),
                 0x0004,
             );
+            SendMessageW(
+                self.hwnd,
+                EM_SETMARGINS,
+                EC_LEFTMARGIN | EC_RIGHTMARGIN,
+                geometry.margin_param,
+            );
+        }
+    }
+
+    pub fn update_dpi(&self, dpi: u32) {
+        let dpi = dpi.max(96);
+        if self.dpi.replace(dpi) == dpi {
+            return;
+        }
+        let font = create_font(dpi, 14);
+        let search_font = create_font(dpi, 16);
+        let old_font = self.font.replace(font);
+        let old_search_font = self.search_font.replace(search_font);
+        let active_font = if self.dialog_mode.get() {
+            font
+        } else {
+            search_font
+        };
+        unsafe {
+            SendMessageW(self.hwnd, WM_SETFONT, active_font as usize, 1);
+            SendMessageW(self.confirm, WM_SETFONT, font as usize, 1);
+            SendMessageW(self.cancel, WM_SETFONT, font as usize, 1);
+            if !old_font.is_null() {
+                DeleteObject(old_font as HGDIOBJ);
+            }
+            if !old_search_font.is_null() {
+                DeleteObject(old_search_font as HGDIOBJ);
+            }
         }
     }
 
@@ -143,12 +188,40 @@ impl TextInput {
 
 impl Drop for TextInput {
     fn drop(&mut self) {
-        if !self.font.is_null() {
-            unsafe { DeleteObject(self.font as HGDIOBJ) };
+        let font = self.font.get();
+        if !font.is_null() {
+            unsafe { DeleteObject(font as HGDIOBJ) };
         }
-        if !self.search_font.is_null() {
-            unsafe { DeleteObject(self.search_font as HGDIOBJ) };
+        let search_font = self.search_font.get();
+        if !search_font.is_null() {
+            unsafe { DeleteObject(search_font as HGDIOBJ) };
         }
+    }
+}
+
+struct InputGeometry {
+    rect: Rect,
+    margin_param: isize,
+}
+
+fn input_geometry(rect: Rect, dpi: u32, dialog: bool) -> InputGeometry {
+    let dpi = dpi.max(96) as i32;
+    let scale = |value: i32| (value * dpi + 48) / 96;
+    let margin = if dialog { scale(10) } else { scale(8) }.clamp(0, u16::MAX as i32);
+    let height = if dialog {
+        scale(24).min(rect.height()).max(1)
+    } else {
+        (rect.height() - scale(6)).max(1)
+    };
+    let top = rect.top + (rect.height() - height) / 2;
+    InputGeometry {
+        rect: Rect {
+            left: rect.left + 1,
+            top,
+            right: rect.right - 1,
+            bottom: top + height,
+        },
+        margin_param: ((margin as u32) | ((margin as u32) << 16)) as isize,
     }
 }
 
@@ -210,6 +283,10 @@ unsafe extern "system" fn edit_proc(
     _subclass_id: usize,
     _data: usize,
 ) -> isize {
+    if message == WM_SETFOCUS || message == WM_KILLFOCUS {
+        let parent = unsafe { GetParent(hwnd) };
+        unsafe { PostMessageW(parent, FOCUS_CHANGED_MESSAGE, 0, 0) };
+    }
     if message == WM_KEYDOWN || message == WM_SYSKEYDOWN {
         let command = match wparam as u32 {
             13 => Some(IDOK),
@@ -245,5 +322,45 @@ fn create_font(dpi: u32, size: i32) -> HFONT {
             (DEFAULT_PITCH | FF_DONTCARE).into(),
             face.as_ptr(),
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dialog_input_is_vertically_centered_at_common_dpis() {
+        for dpi in [96, 120, 144, 192] {
+            let scale = |value: i32| (value * dpi + 48) / 96;
+            let outer = Rect {
+                left: scale(24),
+                top: scale(64),
+                right: scale(436),
+                bottom: scale(100),
+            };
+            let geometry = input_geometry(outer, dpi as u32, true);
+            assert_eq!(geometry.rect.height(), scale(24));
+            let top_space = geometry.rect.top - outer.top;
+            let bottom_space = outer.bottom - geometry.rect.bottom;
+            assert!((top_space - bottom_space).abs() <= 1);
+            let margin = geometry.margin_param as u32 & 0xffff;
+            assert_eq!(margin, scale(10) as u32);
+            assert_eq!(geometry.margin_param as u32 >> 16, margin);
+        }
+    }
+
+    #[test]
+    fn search_input_keeps_its_existing_height_ratio() {
+        let outer = Rect {
+            left: 18,
+            top: 98,
+            right: 822,
+            bottom: 130,
+        };
+        let geometry = input_geometry(outer, 96, false);
+        assert_eq!(geometry.rect.height(), 26);
+        assert_eq!(geometry.rect.top, 101);
+        assert_eq!(geometry.margin_param as u32 & 0xffff, 8);
     }
 }

@@ -16,8 +16,8 @@ use windows_sys::Win32::Graphics::Gdi::{
 };
 use windows_sys::Win32::UI::HiDpi::GetDpiForWindow;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey, UnregisterHotKey,
-    VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
+    GetFocus, GetKeyState, MOD_ALT, MOD_CONTROL, MOD_SHIFT, MOD_WIN, RegisterHotKey,
+    UnregisterHotKey, VK_CONTROL, VK_LWIN, VK_MENU, VK_SHIFT,
 };
 use windows_sys::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
@@ -201,6 +201,13 @@ impl App {
         Ok(())
     }
 
+    pub fn dpi_changed(&mut self, dpi: u32) {
+        self.dpi = dpi.max(96);
+        if let Some(input) = &self.text_input {
+            input.update_dpi(self.dpi);
+        }
+    }
+
     pub fn relayout(&mut self) {
         let mut client = RECT::default();
         unsafe { GetClientRect(self.hwnd, &mut client) };
@@ -242,10 +249,10 @@ impl App {
             Some(InputMode::Search) => {
                 let mut rect = self.layout.search_box;
                 rect.right = self.layout.search_close_button.left;
-                input.set_rect(rect);
+                input.set_rect(rect, false);
             }
             Some(_) => {
-                input.set_rect(self.layout.text_input);
+                input.set_rect(self.layout.text_input, true);
                 input.set_buttons(
                     self.layout.text_confirm_button,
                     self.layout.text_cancel_button,
@@ -446,6 +453,10 @@ impl App {
             keyboard_selection: self.keyboard_selection,
             add_overlay_open: self.add_overlay_open,
             text_overlay_title: self.input_title(),
+            text_input_focused: self
+                .text_input
+                .as_ref()
+                .is_some_and(|input| unsafe { GetFocus() } == input.hwnd),
             content_progress: self.content_progress(),
             accent: self.accent,
             hwnd: self.hwnd,
@@ -1729,6 +1740,18 @@ impl App {
         let message = self.writer.as_ref().and_then(ConfigWriter::take_error);
         if let Some(message) = message {
             self.error(&message);
+        }
+    }
+
+    pub fn redraw_input_overlay(&self) {
+        if self.input_title().is_some() {
+            let rect = RECT {
+                left: self.layout.text_input.left,
+                top: self.layout.text_input.top,
+                right: self.layout.text_input.right,
+                bottom: self.layout.text_input.bottom,
+            };
+            unsafe { InvalidateRect(self.hwnd, &rect, 0) };
         }
     }
 

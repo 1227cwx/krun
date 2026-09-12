@@ -200,6 +200,10 @@ unsafe extern "system" fn window_proc(
     }
     let app = unsafe { &mut *app };
 
+    if message == crate::text_input::FOCUS_CHANGED_MESSAGE {
+        app.redraw_input_overlay();
+        return 0;
+    }
     if message == crate::icon_loader::ICON_READY_MESSAGE {
         app.icons_ready();
         return 0;
@@ -343,7 +347,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DPICHANGED => {
-            app.dpi = ((wparam >> 16) & 0xffff) as u32;
+            app.dpi_changed(((wparam >> 16) & 0xffff) as u32);
             app::apply_dpi_rect(hwnd, lparam as *const RECT);
             app.relayout();
             0

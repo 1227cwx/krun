@@ -390,7 +390,7 @@ impl Layout {
             left: text_overlay.left + px(24),
             top: text_overlay.top + px(64),
             right: text_overlay.right - px(24),
-            bottom: text_overlay.top + px(106),
+            bottom: text_overlay.top + px(100),
         };
         let text_confirm_button = Rect {
             left: text_overlay.right - px(202),
@@ -706,6 +706,28 @@ mod tests {
         assert!(layout.add_overlay.right <= layout.client.right);
         assert!(layout.add_overlay.bottom <= layout.client.bottom);
         assert!(layout.add_drop_zone.top > layout.add_file_button.bottom);
+    }
+
+    #[test]
+    fn dialog_input_has_compact_height_and_clear_spacing() {
+        for dpi in [96u32, 120, 144, 192] {
+            let width = 840 * dpi as i32 / 96;
+            let height = 520 * dpi as i32 / 96;
+            let layout = Layout::calculate(LayoutInput {
+                width,
+                height,
+                dpi,
+                view: View::Launcher,
+                category_names: &["常用".into()],
+                category_start: 0,
+                search_mode: false,
+                item_count: 0,
+            });
+            let expected = (36 * dpi as i32 + 48) / 96;
+            assert_eq!(layout.text_input.height(), expected);
+            assert!(layout.text_input.top > layout.text_overlay.top);
+            assert!(layout.text_input.bottom < layout.text_confirm_button.top);
+        }
     }
 
     #[test]

@@ -51,6 +51,7 @@ pub struct RenderData<'a> {
     pub keyboard_selection: bool,
     pub add_overlay_open: bool,
     pub text_overlay_title: Option<&'static str>,
+    pub text_input_focused: bool,
     pub content_progress: f32,
     pub accent: COLORREF,
     pub hwnd: HWND,
@@ -570,7 +571,16 @@ unsafe fn paint_text_overlay(hdc: HDC, data: &RenderData<'_>, font: HFONT) {
             0x00000004 | 0x00000020,
         );
         fill(hdc, data.layout.text_input, SURFACE);
-        frame(hdc, data.layout.text_input, ACCENT, 1);
+        frame(
+            hdc,
+            data.layout.text_input,
+            if data.text_input_focused {
+                ACCENT
+            } else {
+                BORDER
+            },
+            1,
+        );
         SelectObject(hdc, font as HGDIOBJ);
     }
 }
