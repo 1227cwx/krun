@@ -46,6 +46,7 @@ pub struct RenderData<'a> {
     pub scrollbar_hover: bool,
     pub scrollbar_active: bool,
     pub hovered_item: Option<usize>,
+    pub hovered_tool: Option<ToolButton>,
     pub pressed_item: Option<usize>,
     pub keyboard_selection: bool,
     pub add_overlay_open: bool,
@@ -107,42 +108,42 @@ pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
             0x00000004 | 0x00000020,
         );
         if data.view == View::Settings {
-            draw_icon(
+            draw_title_tool(
                 memory,
                 data.layout.back_button,
                 ToolButton::Back,
                 TEXT,
-                data.layout.scale,
+                data,
             );
         } else {
-            draw_icon(
+            draw_title_tool(
                 memory,
                 data.layout.search_button,
                 ToolButton::Search,
                 MUTED,
-                data.layout.scale,
+                data,
             );
-            draw_icon(
+            draw_title_tool(
                 memory,
                 data.layout.add_button,
                 ToolButton::AddMenu,
                 MUTED,
-                data.layout.scale,
+                data,
             );
-            draw_icon(
+            draw_title_tool(
                 memory,
                 data.layout.settings_button,
                 ToolButton::Settings,
                 MUTED,
-                data.layout.scale,
+                data,
             );
         }
-        draw_icon(
+        draw_title_tool(
             memory,
             data.layout.close_button,
             ToolButton::Close,
             MUTED,
-            data.layout.scale,
+            data,
         );
 
         match data.view {
@@ -635,6 +636,30 @@ unsafe fn paint_add_overlay(hdc: HDC, data: &RenderData<'_>, font: HFONT, small:
         );
         SelectObject(hdc, font as HGDIOBJ);
     }
+}
+
+unsafe fn draw_title_tool(
+    hdc: HDC,
+    rect: Rect,
+    kind: ToolButton,
+    color: COLORREF,
+    data: &RenderData<'_>,
+) {
+    let hovered = data.hovered_tool == Some(kind);
+    if hovered {
+        let background = if kind == ToolButton::Close {
+            0x0042_42c7
+        } else {
+            HOVER
+        };
+        unsafe { fill(hdc, rect, background) };
+    }
+    let icon_color = if hovered && kind == ToolButton::Close {
+        SURFACE
+    } else {
+        color
+    };
+    unsafe { draw_icon(hdc, rect, kind, icon_color, data.layout.scale) };
 }
 
 unsafe fn draw_icon(hdc: HDC, rect: Rect, kind: ToolButton, color: COLORREF, scale: f32) {

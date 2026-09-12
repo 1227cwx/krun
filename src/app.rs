@@ -88,6 +88,7 @@ pub struct App {
     pub add_overlay_open: bool,
     pub modal_open: bool,
     pub hovered_item: Option<usize>,
+    pub hovered_tool: Option<ToolButton>,
     pub scrollbar_hover: bool,
     pub pressed_item: Option<usize>,
     /// True when the current selection was moved with the keyboard, so the
@@ -150,6 +151,7 @@ impl App {
             add_overlay_open: false,
             modal_open: false,
             hovered_item: None,
+            hovered_tool: None,
             scrollbar_hover: false,
             pressed_item: None,
             keyboard_selection: false,
@@ -433,6 +435,7 @@ impl App {
             scrollbar_hover: self.scrollbar_hover,
             scrollbar_active: self.dragging_scrollbar,
             hovered_item: self.hovered_item,
+            hovered_tool: self.hovered_tool,
             pressed_item: self.pressed_item,
             keyboard_selection: self.keyboard_selection,
             add_overlay_open: self.add_overlay_open,
@@ -615,12 +618,33 @@ impl App {
     }
 
     pub fn mouse_move(&mut self, x: i32, y: i32) {
-        let scrollbar_hover = self.scrollbar_contains(x, y);
-        let hovered = if !scrollbar_hover
-            && self.view == View::Launcher
-            && !self.add_overlay_open
-            && (self.input_mode.is_none() || matches!(self.input_mode, Some(InputMode::Search)))
+        let interactions_enabled = !self.add_overlay_open
+            && (self.input_mode.is_none() || matches!(self.input_mode, Some(InputMode::Search)));
+        let hovered_category = (self.view == View::Launcher && interactions_enabled)
+            .then(|| self.layout.category_at(x, y))
+            .flatten();
+        if let Some(category) = hovered_category
+            && category != self.config.active_category_index()
         {
+            self.select_category(category);
+            return;
+        }
+
+        let hovered_tool = interactions_enabled
+            .then(|| self.layout.tool_at(x, y, self.view))
+            .flatten()
+            .filter(|tool| {
+                matches!(
+                    tool,
+                    ToolButton::Back
+                        | ToolButton::Search
+                        | ToolButton::AddMenu
+                        | ToolButton::Settings
+                        | ToolButton::Close
+                )
+            });
+        let scrollbar_hover = self.scrollbar_contains(x, y);
+        let hovered = if !scrollbar_hover && self.view == View::Launcher && interactions_enabled {
             self.layout.item_at(x, y).and_then(|local| {
                 let global = self.page_offset + local;
                 (global < self.visible_count()).then_some(global)
@@ -628,8 +652,12 @@ impl App {
         } else {
             None
         };
-        if hovered != self.hovered_item || scrollbar_hover != self.scrollbar_hover {
+        if hovered != self.hovered_item
+            || hovered_tool != self.hovered_tool
+            || scrollbar_hover != self.scrollbar_hover
+        {
             self.hovered_item = hovered;
+            self.hovered_tool = hovered_tool;
             self.scrollbar_hover = scrollbar_hover;
             self.redraw();
         }
@@ -644,9 +672,10 @@ impl App {
 
     pub fn mouse_leave(&mut self) {
         let had_hover = self.hovered_item.take().is_some();
+        let had_tool = self.hovered_tool.take().is_some();
         let had_press = self.pressed_item.take().is_some();
         let had_scroll = std::mem::take(&mut self.scrollbar_hover);
-        if had_hover || had_press || had_scroll {
+        if had_hover || had_tool || had_press || had_scroll {
             self.redraw();
         }
     }
@@ -1278,8 +1307,15 @@ impl App {
         self.search_mode = false;
         self.query.clear();
         self.search_results.clear();
+        if matches!(self.input_mode, Some(InputMode::Search)) {
+            self.input_mode = None;
+            if let Some(input) = &self.text_input {
+                input.hide();
+            }
+        }
         self.selected = None;
         self.hovered_item = None;
+        self.hovered_tool = None;
         self.pressed_item = None;
         self.keyboard_selection = false;
         self.page_offset = 0;
@@ -1911,6 +1947,40 @@ mod tests {
         app.search_results = search::results(&app.config, &app.query);
         assert_eq!(app.visible_count(), app.search_results.len());
         assert_eq!(app.visible_ref(0), app.search_results.first().copied());
+    }
+
+    #[test]
+    fn hovering_category_switches_without_clicking() {
+        let mut config = Config::default();
+        config
+            .categories
+            .push(crate::config::Category::new("tools", "工具"));
+        let mut app = App::new(config, std::path::PathBuf::new(), false);
+        let (_, rect) = app.layout.categories[1];
+
+        app.search_mode = true;
+        app.input_mode = Some(InputMode::Search);
+        app.query = "示例".into();
+        app.mouse_move((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+
+        assert_eq!(app.config.active_category, "tools");
+        assert!(!app.search_mode);
+        assert!(app.input_mode.is_none());
+        assert!(app.query.is_empty());
+        assert_eq!(app.selected, None);
+        assert_eq!(app.hovered_tool, None);
+    }
+
+    #[test]
+    fn toolbar_hover_is_tracked_and_cleared_on_leave() {
+        let mut app = App::new(Config::default(), std::path::PathBuf::new(), false);
+        let rect = app.layout.search_button;
+
+        app.mouse_move((rect.left + rect.right) / 2, (rect.top + rect.bottom) / 2);
+        assert_eq!(app.hovered_tool, Some(ToolButton::Search));
+
+        app.mouse_leave();
+        assert_eq!(app.hovered_tool, None);
     }
 
     #[test]

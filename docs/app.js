@@ -106,7 +106,7 @@
   function activate(index) {
     category = index;
     selected = null;
-    search.value = '';
+    setSearch(false);
     setMenu(false);
     setAddMenu(false);
     renderTabs();
@@ -138,6 +138,9 @@
       tab.setAttribute('aria-controls', 'demo-panel');
       tab.tabIndex = index === category ? 0 : -1;
       tab.addEventListener('click', () => activate(index));
+      tab.addEventListener('pointerenter', event => {
+        if (event.pointerType === 'mouse' && category !== index) activate(index);
+      });
       tab.addEventListener('keydown', event => {
         const next = {ArrowRight: (index + 1) % categories.length, ArrowLeft: (index + categories.length - 1) % categories.length, Home: 0, End: categories.length - 1}[event.key];
         if (next !== undefined) {
