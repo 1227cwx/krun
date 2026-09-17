@@ -54,8 +54,19 @@ pub struct LaunchItem {
     pub id: String,
     pub name: String,
     pub path: String,
+    pub icon_path: String,
     pub arguments: String,
     pub working_directory: String,
+}
+
+impl LaunchItem {
+    pub fn icon_source(&self) -> &str {
+        if self.icon_path.trim().is_empty() {
+            &self.path
+        } else {
+            &self.icon_path
+        }
+    }
 }
 
 impl Default for Config {
@@ -276,6 +287,21 @@ mod tests {
         let mut with_first = config;
         with_first.categories.push(Category::new(&first, "测试"));
         assert_ne!(first, with_first.unique_category_id("测试"));
+    }
+
+    #[test]
+    fn old_item_without_custom_icon_loads_and_round_trips() {
+        let json = r#"{"id":"one","name":"Example","path":"C:\\Example.exe","arguments":"","working_directory":""}"#;
+        let mut item: LaunchItem = serde_json::from_str(json).unwrap();
+        assert_eq!(item.icon_path, "");
+        assert_eq!(item.icon_source(), item.path);
+        item.icon_path = "C:\\Icons\\Example.ico".into();
+        assert_eq!(item.icon_source(), item.icon_path);
+        let restored: LaunchItem =
+            serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();
+        assert_eq!(restored, item);
+        item.icon_path.clear();
+        assert_eq!(item.icon_source(), item.path);
     }
 
     #[test]

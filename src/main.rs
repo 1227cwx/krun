@@ -8,6 +8,7 @@ mod hotkey;
 mod icon_loader;
 mod item_view;
 mod layout;
+mod menu;
 mod render;
 mod search;
 mod shell;
@@ -169,11 +170,21 @@ fn run() -> Result<(), String> {
             if result == -1 {
                 return Err("读取 Windows 消息失败。".into());
             }
-            if message.hwnd == app.text_input_hwnd()
-                && (message.message == WM_KEYDOWN || message.message == WM_SYSKEYDOWN)
-                && handle_edit_key(&mut app, message.wParam as u32)
+            if app.menu_open()
+                && message.hwnd == app.text_input_hwnd()
+                && message.message == WM_CHAR
             {
                 continue;
+            }
+            if message.hwnd == app.text_input_hwnd()
+                && (message.message == WM_KEYDOWN || message.message == WM_SYSKEYDOWN)
+            {
+                if app.menu_open() && app.menu_key(message.wParam as u32) {
+                    continue;
+                }
+                if handle_edit_key(&mut app, message.wParam as u32) {
+                    continue;
+                }
             }
             TranslateMessage(&message);
             DispatchMessageW(&message);
@@ -339,6 +350,7 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_SIZE => {
+            app.dismiss_menu();
             app.relayout();
             0
         }
@@ -347,16 +359,19 @@ unsafe extern "system" fn window_proc(
             0
         }
         WM_DPICHANGED => {
+            app.dismiss_menu();
             app.dpi_changed(((wparam >> 16) & 0xffff) as u32);
             app::apply_dpi_rect(hwnd, lparam as *const RECT);
             app.relayout();
             0
         }
         WM_DISPLAYCHANGE => {
+            app.dismiss_menu();
             app.relayout();
             0
         }
         WM_ACTIVATE if (wparam & 0xffff) == 0 => {
+            app.dismiss_menu();
             if unsafe { IsWindowEnabled(hwnd) } != 0
                 && !app::should_stay_visible()
                 && !app.ignore_immediate_deactivate()
@@ -422,6 +437,9 @@ fn handle_edit_key(app: &mut App, key: u32) -> bool {
 }
 
 fn handle_key(app: &mut App, key: u32) {
+    if app.menu_key(key) {
+        return;
+    }
     let editing = unsafe { GetFocus() } == app.text_input_hwnd();
     if editing {
         if key == VK_ESCAPE as u32 {

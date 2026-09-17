@@ -7,6 +7,7 @@ use windows::Win32::System::Com::{
     CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
     CoTaskMemFree, CoUninitialize,
 };
+use windows::Win32::UI::Shell::Common::COMDLG_FILTERSPEC;
 use windows::Win32::UI::Shell::{
     FOS_ALLOWMULTISELECT, FOS_FILEMUSTEXIST, FOS_FORCEFILESYSTEM, FOS_NODEREFERENCELINKS,
     FOS_PATHMUSTEXIST, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog, SIGDN_FILESYSPATH,
@@ -32,6 +33,7 @@ pub fn item_from_path(path: PathBuf) -> LaunchItem {
         id: make_id(&path_text),
         name,
         path: path_text,
+        icon_path: String::new(),
         arguments: String::new(),
         working_directory: String::new(),
     }
@@ -42,6 +44,71 @@ fn make_id(path: &str) -> String {
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     path.to_lowercase().hash(&mut hasher);
     format!("item-{:016x}", hasher.finish())
+}
+
+pub fn choose_icon_file(owner: HWND) -> Result<Option<PathBuf>, String> {
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if initialized.is_err() {
+        return Err(format!("初始化文件选择器失败：{initialized:?}"));
+    }
+    let result = unsafe { choose_icon_file_inner(owner) };
+    unsafe { CoUninitialize() };
+    result
+}
+
+unsafe fn choose_icon_file_inner(owner: HWND) -> Result<Option<PathBuf>, String> {
+    let dialog: IFileOpenDialog = unsafe {
+        CoCreateInstance(&FileOpenDialog, None, CLSCTX_INPROC_SERVER)
+            .map_err(|error| format!("创建文件选择器失败：{error}"))?
+    };
+    let options = unsafe {
+        dialog
+            .GetOptions()
+            .map_err(|error| format!("读取选择器设置失败：{error}"))?
+    } | FOS_FORCEFILESYSTEM
+        | FOS_PATHMUSTEXIST
+        | FOS_FILEMUSTEXIST
+        | FOS_NODEREFERENCELINKS;
+    let filter_name = windows::core::HSTRING::from("图标来源 (*.ico;*.exe)");
+    let filter_spec = windows::core::HSTRING::from("*.ico;*.exe");
+    let title = windows::core::HSTRING::from("选择图标来源");
+    unsafe {
+        dialog
+            .SetOptions(options)
+            .map_err(|error| format!("设置文件选择器失败：{error}"))?;
+        dialog
+            .SetFileTypes(&[COMDLG_FILTERSPEC {
+                pszName: windows::core::PCWSTR(filter_name.as_ptr()),
+                pszSpec: windows::core::PCWSTR(filter_spec.as_ptr()),
+            }])
+            .map_err(|error| format!("设置图标文件筛选失败：{error}"))?;
+        dialog
+            .SetTitle(windows::core::PCWSTR(title.as_ptr()))
+            .map_err(|error| format!("设置选择器标题失败：{error}"))?;
+    }
+    if unsafe { dialog.Show(Some(WindowsHwnd(owner))) }.is_err() {
+        return Ok(None);
+    }
+    let item = unsafe {
+        dialog
+            .GetResult()
+            .map_err(|error| format!("读取选择结果失败：{error}"))?
+    };
+    let path = unsafe {
+        item.GetDisplayName(SIGDN_FILESYSPATH)
+            .map_err(|error| format!("读取文件路径失败：{error}"))?
+    };
+    let text = unsafe { path.to_string() }.map_err(|error| format!("转换文件路径失败：{error}"));
+    unsafe { CoTaskMemFree(Some(path.as_ptr().cast())) };
+    let path = PathBuf::from(text?);
+    let supported = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "ico" | "exe"));
+    if !supported {
+        return Err("请选择 .ico 或 .exe 图标来源文件。".into());
+    }
+    Ok(Some(path))
 }
 
 pub fn choose_paths(owner: HWND, folders: bool) -> Result<Vec<PathBuf>, String> {
