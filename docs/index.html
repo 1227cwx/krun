@@ -39,35 +39,9 @@
                 <button id="close-button" class="tool close" aria-label="关闭演示窗口" title="关闭" data-icon="close"></button>
               </div>
             </div>
-            <div id="add-menu" class="context-menu" role="menu" aria-label="添加" hidden>
+            <div id="add-menu" role="menu" aria-label="添加" hidden>
               <button id="add-menu-item" role="menuitem" type="button">添加项目</button>
               <button id="add-menu-category" role="menuitem" type="button">新建分类</button>
-            </div>
-            <div id="item-menu" class="context-menu" role="menu" aria-label="项目操作" hidden>
-              <button role="menuitem" type="button" data-item-action="run">运行</button>
-              <button role="menuitem" type="button" data-item-action="admin">以管理员身份运行</button>
-              <button role="menuitem" type="button" data-item-action="open-with">打开方式...</button>
-              <div class="menu-separator" role="separator"></div>
-              <button id="item-change-icon" role="menuitem" type="button">修改图标...</button>
-              <button id="item-restore-icon" role="menuitem" type="button">恢复默认图标</button>
-              <div class="menu-separator" role="separator"></div>
-              <button role="menuitem" type="button" data-item-action="reveal">打开文件所在位置</button>
-              <button role="menuitem" type="button" data-item-action="copy">复制完整路径</button>
-              <div class="menu-separator" role="separator"></div>
-              <button id="item-move" role="menuitem" type="button" aria-haspopup="menu" aria-expanded="false">移动到分类<span aria-hidden="true">›</span></button>
-              <div class="menu-separator" role="separator"></div>
-              <button role="menuitem" type="button" data-item-action="new">新建项目</button>
-              <button role="menuitem" type="button" data-item-action="sort">按名称排序</button>
-              <div class="menu-separator" role="separator"></div>
-              <button role="menuitem" type="button" data-item-action="rename">重命名</button>
-              <button role="menuitem" type="button" data-item-action="delete">删除</button>
-            </div>
-            <div id="move-menu" class="submenu" role="menu" aria-label="移动到分类" hidden></div>
-            <div id="category-context-menu" class="context-menu" role="menu" aria-label="分类操作" hidden>
-              <button id="category-new" role="menuitem" type="button">新建分类</button>
-              <button id="category-rename" role="menuitem" type="button">重命名分类</button>
-              <div class="menu-separator" role="separator"></div>
-              <button id="category-delete" role="menuitem" type="button">删除分类</button>
             </div>
             <div id="launcher-view">
               <div class="categorybar">
@@ -93,7 +67,6 @@
               <label class="setting-row"><span>允许移动<small>关闭后锁定位置；居中时不可用</small></span><input id="movable" type="checkbox" role="switch" disabled></label>
               <label class="setting-row"><span>允许调整大小<small>使用窗口边缘改变启动板尺寸</small></span><input id="resizable" type="checkbox" role="switch" checked></label>
             </div>
-            <input id="icon-file" type="file" accept=".ico,.png,.jpg,.jpeg,.svg,image/*" hidden>
           </div>
           <div id="overlay" hidden>
             <div id="add-dialog" class="dialog" role="dialog" aria-modal="true" aria-labelledby="add-title" hidden>
@@ -107,11 +80,6 @@
               <input id="category-name" aria-label="分类名称" maxlength="30" required autocomplete="off">
               <div class="dialog-actions"><button class="accent" type="submit">确定</button><button id="category-cancel" type="button">取消</button></div>
             </form>
-            <div id="confirm-dialog" class="dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" hidden>
-              <h2 id="confirm-title">删除分类</h2>
-              <p id="confirm-message"></p>
-              <div class="dialog-actions"><button id="confirm-submit" class="accent" type="button">删除</button><button id="confirm-cancel" type="button">取消</button></div>
-            </div>
           </div>
           <button id="restore-button" hidden><img src="icon.svg" alt="" width="28" height="28">重新打开 KRun 演示</button>
           <div id="resize-handle" aria-hidden="true"></div>

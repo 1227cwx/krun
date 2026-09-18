@@ -1,7 +1,6 @@
 use crate::config::{Config, LaunchItem};
 use crate::hotkey;
 use crate::layout::{Layout, Rect, SettingControl, ToolButton, View};
-use crate::menu::{MenuEntry, MenuState};
 use crate::win::wide;
 use std::mem::zeroed;
 use std::ptr::null_mut;
@@ -53,7 +52,6 @@ pub struct RenderData<'a> {
     pub add_overlay_open: bool,
     pub text_overlay_title: Option<&'static str>,
     pub text_input_focused: bool,
-    pub menu: Option<&'a MenuState>,
     pub content_progress: f32,
     pub accent: COLORREF,
     pub hwnd: HWND,
@@ -170,9 +168,6 @@ pub unsafe fn paint(hwnd: HWND, data: &RenderData<'_>) {
                 SURFACE,
                 alpha,
             );
-        }
-        if let Some(menu) = data.menu {
-            paint_menu(memory, menu, font, data.layout.scale);
         }
         frame(memory, data.layout.client, OUTER_BORDER, 1);
         frame(memory, data.layout.client.inset(1), BORDER, 1);
@@ -587,80 +582,6 @@ unsafe fn paint_text_overlay(hdc: HDC, data: &RenderData<'_>, font: HFONT) {
             1,
         );
         SelectObject(hdc, font as HGDIOBJ);
-    }
-}
-
-unsafe fn paint_menu(hdc: HDC, menu: &MenuState, font: HFONT, scale: f32) {
-    unsafe fn panel(hdc: HDC, menu: &MenuState, submenu: bool, font: HFONT, scale: f32) {
-        let rect = if submenu {
-            let Some(rect) = menu.submenu_rect else {
-                return;
-            };
-            rect
-        } else {
-            menu.root_rect
-        };
-        let shadow = Rect {
-            left: rect.left + scaled(scale, 4),
-            top: rect.top + scaled(scale, 4),
-            right: rect.right + scaled(scale, 4),
-            bottom: rect.bottom + scaled(scale, 4),
-        };
-        unsafe {
-            fill(hdc, shadow, 0x00cbc6bf);
-            fill(hdc, rect, SURFACE);
-            frame(hdc, rect, BORDER, 1);
-            SelectObject(hdc, font as HGDIOBJ);
-        }
-        for row in menu.rows(submenu) {
-            let Some(entry) = menu.entry(submenu, row.index) else {
-                continue;
-            };
-            if row.separator {
-                let y = (row.rect.top + row.rect.bottom) / 2;
-                unsafe {
-                    fill(
-                        hdc,
-                        Rect {
-                            left: row.rect.left + scaled(scale, 10),
-                            top: y,
-                            right: row.rect.right - scaled(scale, 10),
-                            bottom: y + 1,
-                        },
-                        BORDER,
-                    );
-                }
-                continue;
-            }
-            if menu.hovered == Some((submenu, row.index))
-                || menu.selected == Some((submenu, row.index))
-            {
-                unsafe { fill(hdc, row.rect, HOVER) };
-            }
-            let color = if row.enabled { TEXT } else { MUTED };
-            let label = match entry {
-                MenuEntry::Command { label, .. } | MenuEntry::Submenu { label, .. } => label,
-                MenuEntry::Separator => continue,
-            };
-            let label_rect = Rect {
-                left: row.rect.left + scaled(scale, 12),
-                right: row.rect.right - scaled(scale, 28),
-                ..row.rect
-            };
-            unsafe { text(hdc, label, label_rect, color, 0x00000004 | 0x00000020) };
-            if row.submenu {
-                let cx = row.rect.right - scaled(scale, 14);
-                let cy = (row.rect.top + row.rect.bottom) / 2;
-                unsafe {
-                    line(hdc, cx - 2, cy - 4, cx + 2, cy, color, 1);
-                    line(hdc, cx + 2, cy, cx - 2, cy + 4, color, 1);
-                }
-            }
-        }
-    }
-    unsafe {
-        panel(hdc, menu, false, font, scale);
-        panel(hdc, menu, true, font, scale);
     }
 }
 

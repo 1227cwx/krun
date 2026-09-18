@@ -3,7 +3,6 @@ use crate::config_writer::ConfigWriter;
 use crate::icon_loader::{IconKey, IconLoader};
 use crate::item_view::Scope;
 use crate::layout::{Layout, LayoutInput, SettingControl, ToolButton, View};
-use crate::menu::{MenuEntry, MenuState};
 use crate::text_input::TextInput;
 use crate::{hotkey, render, search, shell, startup, tray, win};
 use std::collections::HashMap;
@@ -22,11 +21,13 @@ use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows_sys::Win32::UI::Shell::{DragFinish, DragQueryFileW, HDROP};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
-    DestroyIcon, GetClientRect, GetCursorPos, GetWindowLongPtrW, GetWindowRect, HICON,
-    HWND_TOPMOST, IsWindowVisible, KillTimer, LWA_ALPHA, MB_ICONERROR, MB_ICONINFORMATION, MB_OK,
-    MB_OKCANCEL, MessageBoxW, SW_HIDE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
+    AppendMenuW, CreatePopupMenu, DestroyIcon, DestroyMenu, GetClientRect, GetCursorPos,
+    GetWindowLongPtrW, GetWindowRect, HICON, HMENU, HWND_TOPMOST, IsWindowVisible, KillTimer,
+    LWA_ALPHA, MB_ICONERROR, MB_ICONINFORMATION, MB_OK, MB_OKCANCEL, MF_POPUP, MF_SEPARATOR,
+    MF_STRING, MessageBoxW, SW_HIDE, SW_SHOW, SWP_FRAMECHANGED, SWP_NOACTIVATE, SWP_NOMOVE,
     SWP_NOSIZE, SWP_NOZORDER, SetForegroundWindow, SetLayeredWindowAttributes, SetTimer,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WS_EX_LAYERED, WS_THICKFRAME,
+    SetWindowLongPtrW, SetWindowPos, ShowWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu,
+    WS_EX_LAYERED, WS_THICKFRAME,
 };
 
 const ITEM_LAUNCH: u32 = 5001;
@@ -40,10 +41,11 @@ const ITEM_NEW: u32 = 5008;
 const ITEM_SORT: u32 = 5009;
 const ITEM_CHANGE_ICON: u32 = 5010;
 const ITEM_RESET_ICON: u32 = 5011;
-const ITEM_MOVE_BASE: u32 = 0x1000_0000;
+const ITEM_MOVE_BASE: u32 = 5100;
 const CATEGORY_NEW: u32 = 5201;
-const CATEGORY_SELECT_BASE: u32 = 0x2000_0000;
-const CATEGORY_CONTEXT_BASE: u32 = 0x3000_0000;
+const CATEGORY_RENAME: u32 = 5202;
+const CATEGORY_DELETE: u32 = 5203;
+const CATEGORY_SELECT_BASE: u32 = 5300;
 pub const PRIMARY_HOTKEY_ID: i32 = 1;
 const SECONDARY_HOTKEY_ID: i32 = 2;
 pub const FADE_TIMER_ID: usize = 9;
@@ -95,7 +97,6 @@ pub struct App {
     pub modal_open: bool,
     pub hovered_item: Option<usize>,
     pub hovered_tool: Option<ToolButton>,
-    pub menu: Option<MenuState>,
     pub scrollbar_hover: bool,
     pub pressed_item: Option<usize>,
     /// True when the current selection was moved with the keyboard, so the
@@ -159,7 +160,6 @@ impl App {
             modal_open: false,
             hovered_item: None,
             hovered_tool: None,
-            menu: None,
             scrollbar_hover: false,
             pressed_item: None,
             keyboard_selection: false,
@@ -201,65 +201,6 @@ impl App {
         // launcher never has to wait for shell icon lookups.
         self.preload_visible_icons();
         Ok(())
-    }
-
-    pub fn menu_open(&self) -> bool {
-        self.menu.is_some()
-    }
-
-    pub fn menu_key(&mut self, key: u32) -> bool {
-        use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-            VK_DOWN, VK_ESCAPE, VK_LEFT, VK_RETURN, VK_RIGHT, VK_UP,
-        };
-        if self.menu.is_none() {
-            return false;
-        }
-        if key == VK_ESCAPE as u32 {
-            self.close_menu();
-        } else if key == VK_UP as u32 {
-            self.menu.as_mut().unwrap().select_next(-1);
-            self.redraw();
-        } else if key == VK_DOWN as u32 {
-            self.menu.as_mut().unwrap().select_next(1);
-            self.redraw();
-        } else if key == VK_RIGHT as u32 {
-            self.menu.as_mut().unwrap().enter_submenu();
-            self.redraw();
-        } else if key == VK_LEFT as u32 {
-            self.menu.as_mut().unwrap().leave_submenu();
-            self.redraw();
-        } else if key == VK_RETURN as u32 {
-            let submenu_selected = self
-                .menu
-                .as_ref()
-                .and_then(|menu| menu.selected)
-                .is_some_and(|(submenu, index)| {
-                    !submenu
-                        && matches!(
-                            self.menu.as_ref().unwrap().entry(false, index),
-                            Some(MenuEntry::Submenu { .. })
-                        )
-                });
-            if submenu_selected {
-                self.menu.as_mut().unwrap().enter_submenu();
-                self.redraw();
-                return true;
-            }
-            let (command, target) = {
-                let menu = self.menu.as_ref().unwrap();
-                (menu.selected_command(), menu.target)
-            };
-            self.menu = None;
-            self.modal_open = false;
-            if let Some(command) = command {
-                self.execute_menu_command(command, target);
-                self.restore_search_input();
-            } else {
-                self.restore_search_input();
-                self.redraw();
-            }
-        }
-        true
     }
 
     pub fn dpi_changed(&mut self, dpi: u32) {
@@ -352,7 +293,6 @@ impl App {
         if unsafe { IsWindowVisible(self.hwnd) } == 0 {
             return;
         }
-        self.menu = None;
         self.modal_open = false;
         self.reset_search_state();
         self.start_fade(0);
@@ -520,7 +460,6 @@ impl App {
                 .text_input
                 .as_ref()
                 .is_some_and(|input| unsafe { GetFocus() } == input.hwnd),
-            menu: self.menu.as_ref(),
             content_progress: self.content_progress(),
             accent: self.accent,
             hwnd: self.hwnd,
@@ -570,9 +509,6 @@ impl App {
     }
 
     pub fn mouse_down(&mut self, x: i32, y: i32) {
-        if self.menu_click(x, y) {
-            return;
-        }
         if self.hit_scrollbar(x, y) {
             return;
         }
@@ -686,9 +622,6 @@ impl App {
     }
 
     pub fn double_click(&mut self, x: i32, y: i32) {
-        if self.menu.is_some() {
-            return;
-        }
         if self.view != View::Launcher
             || self.add_overlay_open
             || (self.input_mode.is_some() && !matches!(self.input_mode, Some(InputMode::Search)))
@@ -710,14 +643,6 @@ impl App {
     }
 
     pub fn mouse_move(&mut self, x: i32, y: i32) {
-        if let Some(menu) = &mut self.menu {
-            let previous = menu.hovered;
-            menu.hover(x, y);
-            if menu.hovered != previous {
-                self.redraw();
-            }
-            return;
-        }
         let interactions_enabled = !self.add_overlay_open
             && (self.input_mode.is_none() || matches!(self.input_mode, Some(InputMode::Search)));
         let hovered_category = (self.view == View::Launcher && interactions_enabled)
@@ -781,10 +706,6 @@ impl App {
     }
 
     pub fn right_click(&mut self, x: i32, y: i32) {
-        if self.menu.is_some() {
-            self.close_menu();
-            return;
-        }
         if self.view != View::Launcher
             || self.add_overlay_open
             || (self.input_mode.is_some() && !matches!(self.input_mode, Some(InputMode::Search)))
@@ -792,7 +713,7 @@ impl App {
             return;
         }
         if let Some(category) = self.layout.category_at(x, y) {
-            self.show_category_menu(category, (x, y));
+            self.show_category_menu(category);
             return;
         }
         if let Some(local) = self.layout.item_at(x, y) {
@@ -800,18 +721,13 @@ impl App {
             if global < self.visible_count() {
                 self.selected = Some(global);
                 self.keyboard_selection = false;
-                self.show_item_menu(global, (x, y));
+                self.show_item_menu(global);
                 self.redraw();
             }
         }
     }
 
     pub fn wheel(&mut self, delta: i32) {
-        if let Some(menu) = &mut self.menu {
-            menu.scroll(if delta < 0 { 1 } else { -1 });
-            self.redraw();
-            return;
-        }
         if self.view != View::Launcher || self.layout.max_page_offset == 0 {
             return;
         }
@@ -980,7 +896,7 @@ impl App {
     }
 
     pub fn character(&mut self, character: char) {
-        if self.menu.is_some() || self.view != View::Launcher || character.is_control() {
+        if self.view != View::Launcher || character.is_control() {
             return;
         }
         self.search_mode = true;
@@ -1264,123 +1180,37 @@ impl App {
         }
     }
 
-    fn open_menu_at(
-        &mut self,
-        entries: Vec<MenuEntry>,
-        anchor: (i32, i32),
-        target: Option<search::ItemRef>,
-    ) {
-        self.menu = Some(MenuState::new(
-            entries,
-            anchor,
-            self.layout.client,
-            self.dpi,
-            target,
-        ));
-        if self.search_mode
-            && let Some(input) = &self.text_input
-        {
-            input.hide();
-        }
-        self.modal_open = true;
-        self.hovered_item = None;
-        self.pressed_item = None;
-        self.redraw();
-    }
-
-    pub fn dismiss_menu(&mut self) {
-        if self.menu.take().is_some() {
-            self.modal_open = false;
-            self.redraw();
-        }
-    }
-
-    fn restore_search_input(&self) {
-        if self.search_mode
-            && !self.add_overlay_open
-            && matches!(self.input_mode, Some(InputMode::Search))
-            && let Some(input) = &self.text_input
-        {
-            let mut rect = self.layout.search_box;
-            rect.right = self.layout.search_close_button.left;
-            input.show(rect, &self.query, None);
-        }
-    }
-
-    fn close_menu(&mut self) {
-        if self.menu.take().is_some() {
-            self.modal_open = false;
-            self.restore_search_input();
-            self.redraw();
-        }
-    }
-
-    fn menu_click(&mut self, x: i32, y: i32) -> bool {
-        let Some(menu) = &self.menu else { return false };
-        let hit = menu.hit(x, y);
-        if let Some((false, index)) = hit
-            && matches!(menu.entry(false, index), Some(MenuEntry::Submenu { .. }))
-        {
-            self.menu.as_mut().unwrap().hover(x, y);
-            self.redraw();
-            return true;
-        }
-        let command = hit.and_then(|(submenu, index)| menu.command_at(submenu, index));
-        let target = menu.target;
-        self.menu = None;
-        self.modal_open = false;
-        if let Some(command) = command {
-            self.execute_menu_command(command, target);
-            self.restore_search_input();
-        } else {
-            self.restore_search_input();
-            self.redraw();
-        }
-        true
-    }
-
-    fn execute_menu_command(&mut self, command: u32, target: Option<search::ItemRef>) {
-        if command == ITEM_NEW || command == CATEGORY_NEW {
-            self.apply_add_command(command);
-        } else if (ITEM_LAUNCH..=ITEM_RESET_ICON).contains(&command)
-            || (ITEM_MOVE_BASE..CATEGORY_SELECT_BASE).contains(&command)
-        {
-            if let Some(target) = target {
-                self.execute_item_command(target, command);
-            }
-        } else if command >= CATEGORY_CONTEXT_BASE {
-            self.execute_category_command(command);
-        } else if command >= CATEGORY_SELECT_BASE {
-            let index = (command - CATEGORY_SELECT_BASE) as usize;
-            if index < self.config.categories.len() {
-                self.category_start = index;
-                self.select_category(index, CategorySwitch::Explicit);
-            }
-        }
-    }
+    pub fn dismiss_menu(&mut self) {}
 
     fn show_add_menu(&mut self) {
-        let entries = vec![
-            command(ITEM_NEW, "添加项目", true),
-            command(CATEGORY_NEW, "新建分类", true),
-        ];
-        self.menu = Some(MenuState::new(
-            entries,
-            (
-                self.layout.add_button.right - scale(220, self.dpi),
-                self.layout.add_button.bottom,
-            ),
-            self.layout.client,
-            self.dpi,
-            None,
-        ));
-        if self.search_mode
-            && let Some(input) = &self.text_input
-        {
-            input.hide();
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
         }
+        append(menu, ITEM_NEW, "添加项目");
+        append(menu, CATEGORY_NEW, "新建分类");
+        let mut anchor = POINT {
+            x: self.layout.add_button.right,
+            y: self.layout.add_button.bottom,
+        };
         self.modal_open = true;
-        self.redraw();
+        let command = unsafe {
+            windows_sys::Win32::Graphics::Gdi::ClientToScreen(self.hwnd, &mut anchor);
+            SetForegroundWindow(self.hwnd);
+            let command = TrackPopupMenu(
+                menu,
+                TPM_RETURNCMD | windows_sys::Win32::UI::WindowsAndMessaging::TPM_RIGHTALIGN,
+                anchor.x,
+                anchor.y,
+                0,
+                self.hwnd,
+                null(),
+            ) as u32;
+            DestroyMenu(menu);
+            command
+        };
+        self.modal_open = false;
+        self.apply_add_command(command);
     }
 
     fn apply_add_command(&mut self, command: u32) {
@@ -1680,68 +1510,57 @@ impl App {
     }
 
     fn show_all_categories_menu(&mut self) {
-        let entries = self
-            .config
-            .categories
-            .iter()
-            .enumerate()
-            .map(|(index, category)| {
-                command(CATEGORY_SELECT_BASE + index as u32, &category.name, true)
-            })
-            .collect();
-        self.open_menu_at(
-            entries,
-            (
-                self.layout.category_more.left,
-                self.layout.category_more.bottom,
-            ),
-            None,
-        );
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
+            return;
+        }
+        for (index, category) in self.config.categories.iter().enumerate() {
+            append(menu, CATEGORY_SELECT_BASE + index as u32, &category.name);
+        }
+        let command = popup(self.hwnd, menu);
+        unsafe { DestroyMenu(menu) };
+        if command >= CATEGORY_SELECT_BASE {
+            let index = (command - CATEGORY_SELECT_BASE) as usize;
+            if index < self.config.categories.len() {
+                self.category_start = index;
+                self.select_category(index, CategorySwitch::Explicit);
+            }
+        }
     }
 
-    fn show_item_menu(&mut self, visible_index: usize, anchor: (i32, i32)) {
+    fn show_item_menu(&mut self, visible_index: usize) {
         let Some(reference) = self.visible_ref(visible_index) else {
             return;
         };
-        let has_custom_icon = !self.config.categories[reference.category].items[reference.item]
-            .icon_path
-            .is_empty();
-        let move_entries = self
-            .config
-            .categories
-            .iter()
-            .enumerate()
-            .map(|(index, category)| {
-                command(
-                    ITEM_MOVE_BASE + index as u32,
-                    &category.name,
-                    index != reference.category,
-                )
-            })
-            .collect();
-        let entries = vec![
-            command(ITEM_LAUNCH, "运行", true),
-            command(ITEM_RUN_AS, "以管理员身份运行", true),
-            command(ITEM_OPEN_WITH, "打开方式...", true),
-            MenuEntry::Separator,
-            command(ITEM_CHANGE_ICON, "修改图标...", true),
-            command(ITEM_RESET_ICON, "恢复默认图标", has_custom_icon),
-            MenuEntry::Separator,
-            command(ITEM_REVEAL, "打开文件所在位置", true),
-            command(ITEM_COPY_PATH, "复制完整路径", true),
-            MenuEntry::Separator,
-            MenuEntry::Submenu {
-                label: "移动到分类".into(),
-                entries: move_entries,
-            },
-            MenuEntry::Separator,
-            command(ITEM_NEW, "新建项目", true),
-            command(ITEM_SORT, "按名称排序", true),
-            MenuEntry::Separator,
-            command(ITEM_RENAME, "重命名", true),
-            command(ITEM_DELETE, "删除", true),
-        ];
-        self.open_menu_at(entries, anchor, Some(reference));
+        let menu = unsafe { CreatePopupMenu() };
+        let move_menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() || move_menu.is_null() {
+            return;
+        }
+        append(menu, ITEM_LAUNCH, "运行");
+        append(menu, ITEM_RUN_AS, "以管理员身份运行");
+        append(menu, ITEM_OPEN_WITH, "打开方式...");
+        unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
+        append(menu, ITEM_CHANGE_ICON, "修改图标...");
+        append(menu, ITEM_RESET_ICON, "恢复默认图标");
+        unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
+        append(menu, ITEM_REVEAL, "打开文件所在位置");
+        append(menu, ITEM_COPY_PATH, "复制完整路径");
+        unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
+        for (index, category) in self.config.categories.iter().enumerate() {
+            append(move_menu, ITEM_MOVE_BASE + index as u32, &category.name);
+        }
+        let label = win::wide("移动到分类");
+        unsafe { AppendMenuW(menu, MF_POPUP, move_menu as usize, label.as_ptr()) };
+        unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
+        append(menu, ITEM_NEW, "新建项目");
+        append(menu, ITEM_SORT, "按名称排序");
+        unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, null()) };
+        append(menu, ITEM_RENAME, "重命名");
+        append(menu, ITEM_DELETE, "删除");
+        let command = popup(self.hwnd, menu);
+        unsafe { DestroyMenu(menu) };
+        self.execute_item_command(reference, command);
     }
 
     fn execute_item_command(&mut self, reference: search::ItemRef, command: u32) {
@@ -1875,33 +1694,23 @@ impl App {
         }
     }
 
-    fn show_category_menu(&mut self, category: usize, anchor: (i32, i32)) {
-        let base = CATEGORY_CONTEXT_BASE + category as u32 * 3;
-        let entries = vec![
-            command(base, "新建分类", true),
-            command(base + 1, "重命名分类", true),
-            MenuEntry::Separator,
-            command(base + 2, "删除分类", self.config.categories.len() > 1),
-        ];
-        self.open_menu_at(entries, anchor, None);
-    }
-
-    fn execute_category_command(&mut self, command: u32) {
-        if command < CATEGORY_CONTEXT_BASE {
+    fn show_category_menu(&mut self, category: usize) {
+        let menu = unsafe { CreatePopupMenu() };
+        if menu.is_null() {
             return;
         }
-        let offset = command - CATEGORY_CONTEXT_BASE;
-        let category = (offset / 3) as usize;
-        if category >= self.config.categories.len() {
-            return;
-        }
-        match offset % 3 {
-            0 => self.create_category(),
-            1 => {
+        append(menu, CATEGORY_NEW, "新建分类");
+        append(menu, CATEGORY_RENAME, "重命名分类");
+        append(menu, CATEGORY_DELETE, "删除分类");
+        let command = popup(self.hwnd, menu);
+        unsafe { DestroyMenu(menu) };
+        match command {
+            CATEGORY_NEW => self.create_category(),
+            CATEGORY_RENAME => {
                 let initial = self.config.categories[category].name.clone();
                 self.open_text_input(InputMode::RenameCategory(category), &initial);
             }
-            2 => self.delete_category(category),
+            CATEGORY_DELETE => self.delete_category(category),
             _ => {}
         }
     }
@@ -2125,14 +1934,6 @@ impl Drop for App {
     }
 }
 
-fn command(id: u32, label: &str, enabled: bool) -> MenuEntry {
-    MenuEntry::Command {
-        id,
-        label: label.into(),
-        enabled,
-    }
-}
-
 fn apply_category_deletion(config: &mut Config, category: usize) -> Option<usize> {
     if config.categories.len() <= 1 || category >= config.categories.len() {
         return None;
@@ -2182,6 +1983,28 @@ fn key_down(key: i32) -> bool {
 
 fn ctrl_down() -> bool {
     key_down(VK_CONTROL as i32)
+}
+
+fn popup(hwnd: HWND, menu: HMENU) -> u32 {
+    let mut point = POINT::default();
+    unsafe {
+        GetCursorPos(&mut point);
+        SetForegroundWindow(hwnd);
+        TrackPopupMenu(
+            menu,
+            TPM_RETURNCMD | TPM_RIGHTBUTTON,
+            point.x,
+            point.y,
+            0,
+            hwnd,
+            null(),
+        ) as u32
+    }
+}
+
+fn append(menu: HMENU, command: u32, label: &str) {
+    let label = win::wide(label);
+    unsafe { AppendMenuW(menu, MF_STRING, command as usize, label.as_ptr()) };
 }
 
 fn message_box(hwnd: HWND, title: &str, message: &str, icon: u32) {
@@ -2416,28 +2239,6 @@ mod tests {
         assert_eq!(item.icon_source(), item.icon_path);
         item.icon_path.clear();
         assert_eq!(item.icon_source(), item.path);
-    }
-
-    #[test]
-    fn menu_commands_keep_fixed_target_reference() {
-        let target = search::ItemRef {
-            category: 2,
-            item: 5,
-        };
-        let menu = MenuState::new(
-            vec![command(ITEM_RENAME, "重命名", true)],
-            (10, 10),
-            crate::layout::Rect {
-                left: 0,
-                top: 0,
-                right: 840,
-                bottom: 520,
-            },
-            96,
-            Some(target),
-        );
-        assert_eq!(menu.target, Some(target));
-        assert_eq!(menu.command_at(false, 0), Some(ITEM_RENAME));
     }
 
     #[test]
