@@ -17,6 +17,7 @@ pub const ICON_READY_MESSAGE: u32 = WM_APP + 5;
 pub struct IconKey {
     pub path: String,
     pub size: i32,
+    pub index: Option<i32>,
 }
 
 struct Request {
@@ -49,7 +50,7 @@ impl IconLoader {
         thread::spawn(move || {
             let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
             while let Ok(request) = receiver.recv() {
-                let icon = load_icon(&request.key.path, request.key.size);
+                let icon = load_source_icon(&request.key.path, request.key.index, request.key.size);
                 if let Ok(mut queue) = worker_ready.lock() {
                     queue.push(ReadyIcon {
                         key: request.key,
@@ -107,7 +108,27 @@ impl Drop for IconLoader {
     }
 }
 
-fn load_icon(path: &str, size: i32) -> HICON {
+pub fn load_source_icon(path: &str, index: Option<i32>, size: i32) -> HICON {
+    if let Some(index) = index {
+        let path = wide(path);
+        let mut icon = std::ptr::null_mut();
+        let count = unsafe {
+            windows_sys::Win32::UI::WindowsAndMessaging::PrivateExtractIconsW(
+                path.as_ptr(),
+                index,
+                size,
+                size,
+                &mut icon,
+                std::ptr::null_mut(),
+                1,
+                0,
+            )
+        };
+        if count == 0 || count == u32::MAX {
+            return std::ptr::null_mut();
+        }
+        return icon;
+    }
     let path = wide(path);
     let mut info: SHFILEINFOW = unsafe { zeroed() };
     let result = unsafe {
@@ -149,6 +170,7 @@ mod tests {
         let a = IconKey {
             path: "app.exe".into(),
             size: 32,
+            index: None,
         };
         let b = IconKey {
             size: 48,

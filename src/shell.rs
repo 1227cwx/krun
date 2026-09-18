@@ -34,6 +34,7 @@ pub fn item_from_path(path: PathBuf) -> LaunchItem {
         name,
         path: path_text,
         icon_path: String::new(),
+        icon_index: 0,
         arguments: String::new(),
         working_directory: String::new(),
     }
@@ -69,8 +70,8 @@ unsafe fn choose_icon_file_inner(owner: HWND) -> Result<Option<PathBuf>, String>
         | FOS_PATHMUSTEXIST
         | FOS_FILEMUSTEXIST
         | FOS_NODEREFERENCELINKS;
-    let filter_name = windows::core::HSTRING::from("图标来源 (*.ico;*.exe)");
-    let filter_spec = windows::core::HSTRING::from("*.ico;*.exe");
+    let filter_name = windows::core::HSTRING::from("图标来源 (*.ico;*.exe;*.dll;*.lnk)");
+    let filter_spec = windows::core::HSTRING::from("*.ico;*.exe;*.dll;*.lnk");
     let title = windows::core::HSTRING::from("选择图标来源");
     unsafe {
         dialog
@@ -104,9 +105,14 @@ unsafe fn choose_icon_file_inner(owner: HWND) -> Result<Option<PathBuf>, String>
     let supported = path
         .extension()
         .and_then(|extension| extension.to_str())
-        .is_some_and(|extension| matches!(extension.to_ascii_lowercase().as_str(), "ico" | "exe"));
+        .is_some_and(|extension| {
+            matches!(
+                extension.to_ascii_lowercase().as_str(),
+                "ico" | "exe" | "dll" | "lnk"
+            )
+        });
     if !supported {
-        return Err("请选择 .ico 或 .exe 图标来源文件。".into());
+        return Err("请选择 .ico、.exe、.dll 或 .lnk 图标来源文件。".into());
     }
     Ok(Some(path))
 }

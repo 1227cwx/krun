@@ -55,6 +55,7 @@ pub struct LaunchItem {
     pub name: String,
     pub path: String,
     pub icon_path: String,
+    pub icon_index: i32,
     pub arguments: String,
     pub working_directory: String,
 }
@@ -294,8 +295,10 @@ mod tests {
         let json = r#"{"id":"one","name":"Example","path":"C:\\Example.exe","arguments":"","working_directory":""}"#;
         let mut item: LaunchItem = serde_json::from_str(json).unwrap();
         assert_eq!(item.icon_path, "");
+        assert_eq!(item.icon_index, 0);
         assert_eq!(item.icon_source(), item.path);
         item.icon_path = "C:\\Icons\\Example.ico".into();
+        item.icon_index = -5;
         assert_eq!(item.icon_source(), item.icon_path);
         let restored: LaunchItem =
             serde_json::from_str(&serde_json::to_string(&item).unwrap()).unwrap();

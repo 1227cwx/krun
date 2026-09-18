@@ -116,7 +116,7 @@ pub struct App {
     content_started: Option<Instant>,
     icon_loader: Option<IconLoader>,
     /// Icons keyed by physical pixel size and expanded filesystem path.
-    icons: HashMap<i32, HashMap<String, HICON>>,
+    icons: HashMap<(i32, Option<i32>), HashMap<String, HICON>>,
     /// Expanded paths keyed by the raw value from launcher.json. This cache is
     /// populated on first use so repeated frames perform no string expansion.
     expanded_paths: HashMap<String, String>,
@@ -490,11 +490,12 @@ impl App {
             .drain(..)
             .filter_map(|(category, item)| self.item_at(category, item))
             .flat_map(|item| {
-                let mut sources = vec![item.path.as_str()];
+                let mut sources = vec![(item.path.as_str(), None)];
                 if !item.icon_path.trim().is_empty() {
-                    sources.insert(0, item.icon_path.as_str());
+                    sources.insert(0, (item.icon_path.as_str(), Some(item.icon_index)));
                 }
-                sources.into_iter().map(move |source| IconKey {
+                sources.into_iter().map(move |(source, index)| IconKey {
+                    index,
                     path: shell::expand_environment(source),
                     size,
                 })
@@ -1468,7 +1469,7 @@ impl App {
             let (key, icon) = item.into_parts();
             let replaced = self
                 .icons
-                .entry(key.size)
+                .entry((key.size, key.index))
                 .or_default()
                 .insert(key.path.clone(), icon);
             if let Some(previous) = replaced
@@ -1500,7 +1501,14 @@ impl App {
                 .unwrap_or(source);
             let cached = self
                 .icons
-                .get(&icon_size)
+                .get(&(
+                    icon_size,
+                    if item.icon_path.trim().is_empty() {
+                        None
+                    } else {
+                        Some(item.icon_index)
+                    },
+                ))
                 .is_some_and(|cache| cache.contains_key(expanded));
             if !cached {
                 missing.push((reference.category, reference.item));
@@ -1660,7 +1668,26 @@ impl App {
         self.modal_open = false;
         match result {
             Ok(Some(path)) => {
-                let value = path.to_string_lossy().into_owned();
+                let directory = self
+                    .config_path
+                    .parent()
+                    .unwrap_or(std::path::Path::new("."));
+                let source = match crate::icon_source::prepare(&path, directory) {
+                    Ok(source) => source,
+                    Err(error) => {
+                        self.error(&error);
+                        return;
+                    }
+                };
+                let value = source.path.to_string_lossy().into_owned();
+                for ((_, index), cache) in &mut self.icons {
+                    if *index == Some(source.index)
+                        && let Some(previous) = cache.remove(&value)
+                        && !previous.is_null()
+                    {
+                        unsafe { DestroyIcon(previous) };
+                    }
+                }
                 if let Some(item) = self
                     .config
                     .categories
@@ -1668,6 +1695,7 @@ impl App {
                     .and_then(|category| category.items.get_mut(reference.item))
                 {
                     item.icon_path = value;
+                    item.icon_index = source.index;
                     self.save();
                     self.preload_visible_icons();
                     self.redraw();
@@ -1688,6 +1716,7 @@ impl App {
             && !item.icon_path.is_empty()
         {
             item.icon_path.clear();
+            item.icon_index = 0;
             self.save();
             self.preload_visible_icons();
             self.redraw();
@@ -1875,13 +1904,14 @@ impl App {
 fn icon_for_item(
     item: &LaunchItem,
     size: i32,
-    icons: &HashMap<i32, HashMap<String, HICON>>,
+    icons: &HashMap<(i32, Option<i32>), HashMap<String, HICON>>,
     expanded_paths: &mut HashMap<String, String>,
     mut loader: Option<&mut IconLoader>,
 ) -> HICON {
     if !item.icon_path.trim().is_empty() {
         let custom = icon_for_path(
             &item.icon_path,
+            Some(item.icon_index),
             size,
             icons,
             expanded_paths,
@@ -1891,28 +1921,33 @@ fn icon_for_item(
             return custom;
         }
     }
-    icon_for_path(&item.path, size, icons, expanded_paths, loader)
+    icon_for_path(&item.path, None, size, icons, expanded_paths, loader)
 }
 
 /// Looks an icon up by expanded filesystem path. Expansion is cached by raw
 /// configured path, so repeated frames do no string allocation or expansion.
 fn icon_for_path(
     path: &str,
+    index: Option<i32>,
     size: i32,
-    icons: &HashMap<i32, HashMap<String, HICON>>,
+    icons: &HashMap<(i32, Option<i32>), HashMap<String, HICON>>,
     expanded_paths: &mut HashMap<String, String>,
     loader: Option<&mut IconLoader>,
 ) -> HICON {
     let expanded = expanded_paths
         .entry(path.to_owned())
         .or_insert_with(|| shell::expand_environment(path));
-    if let Some(icon) = icons.get(&size).and_then(|cache| cache.get(expanded)) {
+    if let Some(icon) = icons
+        .get(&(size, index))
+        .and_then(|cache| cache.get(expanded))
+    {
         return *icon;
     }
     if let Some(loader) = loader {
         loader.request(IconKey {
             path: expanded.clone(),
             size,
+            index,
         });
     }
     null_mut()
@@ -2238,6 +2273,7 @@ mod tests {
         item.icon_path = "C:\\App.ico".into();
         assert_eq!(item.icon_source(), item.icon_path);
         item.icon_path.clear();
+        item.icon_index = 0;
         assert_eq!(item.icon_source(), item.path);
     }
 
@@ -2247,12 +2283,12 @@ mod tests {
         let expanded = shell::expand_environment(path);
         let mut icons = HashMap::new();
         icons
-            .entry(32)
+            .entry((32, None))
             .or_insert_with(HashMap::new)
             .insert(expanded, null_mut());
         let mut expanded_paths = HashMap::new();
 
-        assert!(icon_for_path(path, 32, &icons, &mut expanded_paths, None).is_null());
+        assert!(icon_for_path(path, None, 32, &icons, &mut expanded_paths, None).is_null());
         assert_eq!(expanded_paths.len(), 1);
     }
 

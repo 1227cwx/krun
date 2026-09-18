@@ -6,6 +6,7 @@ mod config;
 mod config_writer;
 mod hotkey;
 mod icon_loader;
+mod icon_source;
 mod item_view;
 mod layout;
 mod render;
