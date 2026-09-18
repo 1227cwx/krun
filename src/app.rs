@@ -289,6 +289,26 @@ impl App {
         self.start_fade(255);
     }
 
+    pub fn hide_immediately(&mut self) {
+        let visible = unsafe { IsWindowVisible(self.hwnd) } != 0;
+        if visible {
+            unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        }
+        self.modal_open = false;
+        self.fade = None;
+        self.current_alpha = 0;
+        unsafe { KillTimer(self.hwnd, FADE_TIMER_ID) };
+        self.reset_search_state();
+        if visible {
+            self.store_window_placement();
+            unsafe {
+                SetLayeredWindowAttributes(self.hwnd, 0, 255, LWA_ALPHA);
+                let ex_style = GetWindowLongPtrW(self.hwnd, -20) as u32;
+                SetWindowLongPtrW(self.hwnd, -20, (ex_style & !WS_EX_LAYERED) as isize);
+            }
+        }
+    }
+
     pub fn hide(&mut self) {
         if unsafe { IsWindowVisible(self.hwnd) } == 0 {
             return;
@@ -951,6 +971,28 @@ impl App {
         self.redraw();
     }
 
+    fn launch_item(&mut self, item: LaunchItem, as_admin: bool) {
+        let result = self.launch_item_with(item, |owner, item| {
+            if as_admin {
+                shell::run_as_admin(owner, item)
+            } else {
+                shell::launch(owner, item)
+            }
+        });
+        if let Err(error) = result {
+            self.error(&error);
+        }
+    }
+
+    fn launch_item_with(
+        &mut self,
+        item: LaunchItem,
+        launch: impl FnOnce(HWND, &LaunchItem) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.hide_immediately();
+        launch(self.hwnd, &item)
+    }
+
     pub fn run_selected(&mut self) {
         let Some(reference) = self.selected.and_then(|index| self.visible_ref(index)) else {
             return;
@@ -958,10 +1000,7 @@ impl App {
         let Some(item) = self.item_at(reference.category, reference.item).cloned() else {
             return;
         };
-        match shell::launch(self.hwnd, &item) {
-            Ok(()) => self.hide(),
-            Err(error) => self.error(&error),
-        }
+        self.launch_item(item, false);
     }
 
     pub fn delete_selected(&mut self) {
@@ -1575,18 +1614,11 @@ impl App {
         match command {
             ITEM_LAUNCH => {
                 let item = self.config.categories[reference.category].items[reference.item].clone();
-                match shell::launch(self.hwnd, &item) {
-                    Ok(()) => self.hide(),
-                    Err(error) => self.error(&error),
-                }
+                self.launch_item(item, false);
             }
             ITEM_RUN_AS => {
                 let item = self.config.categories[reference.category].items[reference.item].clone();
-                if let Err(error) = shell::run_as_admin(self.hwnd, &item) {
-                    self.error(&error);
-                } else {
-                    self.hide();
-                }
+                self.launch_item(item, true);
             }
             ITEM_OPEN_WITH => {
                 let path = self.config.categories[reference.category].items[reference.item]
@@ -2218,6 +2250,34 @@ mod tests {
 
         app.mouse_leave();
         assert_eq!(app.hovered_tool, None);
+    }
+
+    #[test]
+    fn launch_attempt_hides_state_before_shell_call_even_on_failure() {
+        let mut app = App::new(Config::default(), std::path::PathBuf::new(), false);
+        app.search_mode = true;
+        app.input_mode = Some(InputMode::Search);
+        app.query = "test".into();
+        app.fade = Some(Fade {
+            from: 0,
+            to: 255,
+            started: Instant::now(),
+        });
+        app.current_alpha = 255;
+        let called = std::cell::Cell::new(false);
+
+        let result = app.launch_item_with(LaunchItem::default(), |_, _| {
+            called.set(true);
+            Err("failed".into())
+        });
+
+        assert!(called.get());
+        assert_eq!(result, Err("failed".into()));
+        assert!(!app.search_mode);
+        assert!(app.query.is_empty());
+        assert!(app.input_mode.is_none());
+        assert!(app.fade.is_none());
+        assert_eq!(app.current_alpha, 0);
     }
 
     #[test]
